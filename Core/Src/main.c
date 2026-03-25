@@ -18,13 +18,16 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "adc.h"
 #include "tim.h"
+#include "usart.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdlib.h>
 #include <math.h>
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -34,6 +37,11 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+/* TESTING=====================================================*/
+#define MOTOR_PIN GPIO_PIN_12
+#define MOTOR_PORT GPIOB
+#define LED_PIN GPIO_PIN_13
+#define LED_PORT GPIOC
 
 /* ==================== Encoder ==================== */
 #define ENCODER_PPR          334       /* Pulses per revolution (334PPR encoder)       */
@@ -172,8 +180,27 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_TIM2_Init();
-  MX_TIM3_Init();
+
+GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+__HAL_RCC_GPIOC_CLK_ENABLE();
+
+GPIO_InitStruct.Pin = GPIO_PIN_13;
+GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+GPIO_InitStruct.Pull = GPIO_NOPULL;
+GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+__HAL_RCC_GPIOB_CLK_ENABLE();
+
+GPIO_InitTypeDef GPIO_InitStruct1 = {0};
+GPIO_InitStruct1.Pin = GPIO_PIN_12;
+GPIO_InitStruct1.Mode = GPIO_MODE_OUTPUT_PP;
+GPIO_InitStruct1.Pull = GPIO_NOPULL;
+GPIO_InitStruct1.Speed = GPIO_SPEED_FREQ_LOW;
+HAL_GPIO_Init(GPIOB, &GPIO_InitStruct1);
+  //MX_TIM2_Init();
+ // MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
 
   /* ==========================================================
@@ -181,20 +208,20 @@ int main(void)
    *  Set to 1 = encoder-only test (motor off, safe for wiring check)
    *  Set to 0 = full PID demo with homing
    * ========================================================== */
-  #define ENCODER_TEST_MODE  0
+  //#define ENCODER_TEST_MODE  0
 
   /* ---- Start Encoder (TIM3) ---- */
-  HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
-  __HAL_TIM_SET_COUNTER(&htim3, 0);
+  //HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
+  //__HAL_TIM_SET_COUNTER(&htim3, 0);
 
-#if !ENCODER_TEST_MODE
+//#if !ENCODER_TEST_MODE
 
   /* ---- Wake DRV8838 ---- */
-  HAL_GPIO_WritePin(SLEEP_GPIO_Port, SLEEP_Pin, GPIO_PIN_SET);
+  //HAL_GPIO_WritePin(SLEEP_GPIO_Port, SLEEP_Pin, GPIO_PIN_SET);
 
   /* ---- Start PWM with 0% duty ---- */
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
+  //__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+  //HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
 
   /* ============================================================
    *  HOMING SEQUENCE
@@ -205,46 +232,46 @@ int main(void)
    *  until it hits the home position (magnet at start of rail).
    *  Then encoder is reset to 0 — this becomes the origin.
    * ============================================================ */
-  #define HOMING_PWM_DUTY  30   /* Slow speed for homing (0–99) */
+  //#define HOMING_PWM_DUTY  30   /* Slow speed for homing (0–99) */
 
   /* Set direction = reverse (toward home) */
-  HAL_GPIO_WritePin(PHASE_GPIO_Port, PHASE_Pin, GPIO_PIN_SET);   /* Reverse */
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, HOMING_PWM_DUTY);
+  //HAL_GPIO_WritePin(PHASE_GPIO_Port, PHASE_Pin, GPIO_PIN_SET);   /* Reverse */
+  //__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, HOMING_PWM_DUTY);
 
   /* Wait until Hall sensor triggers (LOW = magnet detected) */
-  while (HAL_GPIO_ReadPin(HALL_SENSOR_GPIO_Port, HALL_SENSOR_Pin) == GPIO_PIN_SET)
-  {
-      /* Still moving toward home... */
-      HAL_Delay(1);
-  }
+  //while (HAL_GPIO_ReadPin(HALL_SENSOR_GPIO_Port, HALL_SENSOR_Pin) == GPIO_PIN_SET)
+  //{
+  //    /* Still moving toward home... */
+  //    HAL_Delay(1);
+  //}
 
   /* ---- Magnet detected! Stop motor ---- */
-  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);   /* PWM = 0 → stop */
+  //__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);   /* PWM = 0 → stop */
 
   /* ---- Reset encoder to 0 — this is now our origin ---- */
-  __HAL_TIM_SET_COUNTER(&htim3, 0);
-  encoder_last_count = 0;
-  encoder_total      = 0;
+  //__HAL_TIM_SET_COUNTER(&htim3, 0);
+ // encoder_last_count = 0;
+ // encoder_total      = 0;
 
   /* ---- Reset PID state ---- */
-  pid.target_position  = 0;
+  /*pid.target_position  = 0;
   pid.current_position = 0;
   pid.error      = 0.0f;
   pid.prev_error = 0.0f;
   pid.integral   = 0.0f;
   pid.derivative = 0.0f;
-  pid.output     = 0.0f;
+  pid.output     = 0.0f;*/
 
   /* Small delay after homing */
-  HAL_Delay(500);
+  //HAL_Delay(500);
 
   /* ---- Now start PID interrupt (closed-loop control begins) ---- */
-  HAL_TIM_Base_Start_IT(&htim2);
+  //HAL_TIM_Base_Start_IT(&htim2);
 
-#else
+//#else
   /* ---- Encoder test: keep DRV8838 sleeping (motor off) ---- */
-  HAL_GPIO_WritePin(SLEEP_GPIO_Port, SLEEP_Pin, GPIO_PIN_RESET);
-#endif
+  //HAL_GPIO_WritePin(SLEEP_GPIO_Port, SLEEP_Pin, GPIO_PIN_RESET);
+//#endif
 
   /* USER CODE END 2 */
 
@@ -252,21 +279,36 @@ int main(void)
   /* USER CODE BEGIN WHILE */
 
   /* ----- Debug variables: watch these in CLion ----- */
-  volatile int32_t  debug_position = 0;   /* 32-bit accumulated position   */
-  volatile uint16_t debug_raw      = 0;   /* Raw TIM3 counter (0~65535)    */
+  //volatile int32_t  debug_position = 0;   /* 32-bit accumulated position   */
+  //volatile uint16_t debug_raw      = 0;   /* Raw TIM3 counter (0~65535)    */
 
   while (1)
   {
     /* USER CODE END WHILE */
+    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
 
+    HAL_Delay(1000);
+
+    /* Turn PC13 OFF */
+    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+
+    HAL_Delay(1000);
+    HAL_GPIO_WritePin(MOTOR_PORT, MOTOR_PIN, GPIO_PIN_SET);
+
+    HAL_Delay(2000); // run for 2 seconds
+
+    /* Turn motor OFF */
+    HAL_GPIO_WritePin(MOTOR_PORT, MOTOR_PIN, GPIO_PIN_RESET);
+
+    HAL_Delay(2000); // off for 2 seconds
     /* USER CODE BEGIN 3 */
 
-#if ENCODER_TEST_MODE
+/*#if ENCODER_TEST_MODE
     debug_position = Encoder_GetPosition();
     debug_raw      = __HAL_TIM_GET_COUNTER(&htim3);
-    HAL_Delay(100);
+    HAL_Delay(100);*/
 
-#else
+//#else
     /* ====== HOLD AT HOME POSITION (0) ======
      * PID is running in TIM2 interrupt, holding position at 0.
      * Hand-turn the motor shaft → PID will fight back and
@@ -291,12 +333,12 @@ int main(void)
     */
 
     /* Hold at 0 forever — PID maintains position in background */
-    pid.target_position = 0;
-    while (1) { }
+  //  pid.target_position = 0;
+    //while (1) { }
 
-#endif
+//#endif
 
-  }
+ // }
   /* USER CODE END 3 */
 }
 
