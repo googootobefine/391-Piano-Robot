@@ -18,16 +18,11 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include "adc.h"
-#include "tim.h"
-#include "usart.h"
-#include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <stdlib.h>
-#include <math.h>
 #include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -37,48 +32,7 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/* TESTING=====================================================*/
-#define MOTOR_PIN GPIO_PIN_12
-#define MOTOR_PORT GPIOB
-#define LED_PIN GPIO_PIN_13
-#define LED_PORT GPIOC
-
-/* ==================== Encoder ==================== */
-#define ENCODER_PPR          334       /* Pulses per revolution (334PPR encoder)       */
-#define ENCODER_CPR          (ENCODER_PPR * 4)  /* Counts per rev in TI12 mode = 1336  */
-#define ENCODER_TIMER_PERIOD 65535     /* TIM3 ARR (16-bit)                            */
-
-/* ==================== PWM ====================    */
-#define PWM_MAX              99        /* TIM2 ARR = 99 → duty 0..99                   */
-#define PWM_MIN              0
-
-/* ==================== PID Gains ==================== */
-/* Start with these, tune on real hardware:             */
-/*   Kp: increase until fast response without overshoot */
-/*   Ki: increase to eliminate steady‑state error       */
-/*   Kd: increase to dampen oscillation                 */
-#define PID_KP               5.0f
-#define PID_KI               0.01f
-#define PID_KD               0.1f
-
-/* ==================== PID Timing ==================== */
-/* TIM2 update fires at ~10 kHz.  We only run PID every */
-/* PID_DIVIDER ticks → PID freq ≈ 1 kHz.                */
-#define PID_DIVIDER          10
-#define PID_DT               (1.0f / 1000.0f)   /* 1 ms */
-
-/* Integral anti‑windup clamp                           */
-#define INTEGRAL_MAX         5000.0f
-
-/* Dead‑band: if |error| <= this, stop the motor        */
-#define DEADBAND             2
-
-/* ==================== Data Recording ==================== */
-/* Record target & actual position into RAM arrays.         */
-/* 2000 samples @ 1kHz = 2 seconds of data.                 */
-#define RECORD_SIZE              2000
-#define RECORD_TRIGGER_THRESHOLD 10    /* Start recording when |error| > this */
-
+#define MM_PER_DEGREE 0.111111f
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -87,67 +41,32 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim3;
+
+UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
+volatile uint32_t rising_edge = 0;
+volatile uint32_t falling_edge = 0;
+volatile uint32_t high_time = 0;
+volatile uint32_t period = 0;
 
-/* ---- PID state ---- */
-typedef struct {
-    float kp;
-    float ki;
-    float kd;
-
-    int32_t target_position;   /* Target encoder count                     */
-    int32_t current_position;  /* Current 32‑bit encoder count             */
-
-    float   error;             /* Current error                            */
-    float   prev_error;        /* Previous error (for D term)              */
-    float   integral;          /* Accumulated integral                     */
-    float   derivative;        /* Derivative term                          */
-    float   output;            /* PID output (signed, ‑PWM_MAX..+PWM_MAX) */
-} PID_t;
-
-PID_t pid = {
-    .kp = PID_KP,
-    .ki = PID_KI,
-    .kd = PID_KD,
-    .target_position  = 0,
-    .current_position = 0,
-    .error      = 0.0f,
-    .prev_error = 0.0f,
-    .integral   = 0.0f,
-    .derivative = 0.0f,
-    .output     = 0.0f,
-};
-
-/* ---- Encoder overflow tracking ---- */
-int16_t  encoder_last_count = 0;   /* Previous raw TIM3 count (signed 16‑bit)  */
-int32_t  encoder_total      = 0;   /* Accumulated 32‑bit position in counts    */
-
-/* ---- ISR tick divider ---- */
-volatile uint16_t pid_tick_counter = 0;
-
-/* ---- Data recording buffers ---- */
-volatile int32_t  rec_target[RECORD_SIZE];   /* Recorded target positions  */
-volatile int32_t  rec_actual[RECORD_SIZE];   /* Recorded actual positions  */
-volatile uint16_t rec_index = 0;             /* Current write index        */
-volatile uint8_t  rec_active = 0;            /* 1 = recording in progress  */
-volatile uint8_t  rec_done   = 0;            /* 1 = recording finished     */
-
+volatile float total_angle = 0;
+float previous_angle = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
-
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);
+float get_angle(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
-/* ---------- Forward declarations ---------- */
-void     PID_Compute(void);
-void     Motor_SetOutput(float output);
-int32_t  Encoder_GetPosition(void);
 
 /* USER CODE END 0 */
 
@@ -159,7 +78,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+//am i still here
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -168,6 +87,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
+
 
   /* USER CODE END Init */
 
@@ -180,165 +100,42 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-
-GPIO_InitTypeDef GPIO_InitStruct = {0};
-
-__HAL_RCC_GPIOC_CLK_ENABLE();
-
-GPIO_InitStruct.Pin = GPIO_PIN_13;
-GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-GPIO_InitStruct.Pull = GPIO_NOPULL;
-GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-__HAL_RCC_GPIOB_CLK_ENABLE();
-
-GPIO_InitTypeDef GPIO_InitStruct1 = {0};
-GPIO_InitStruct1.Pin = GPIO_PIN_12;
-GPIO_InitStruct1.Mode = GPIO_MODE_OUTPUT_PP;
-GPIO_InitStruct1.Pull = GPIO_NOPULL;
-GPIO_InitStruct1.Speed = GPIO_SPEED_FREQ_LOW;
-HAL_GPIO_Init(GPIOB, &GPIO_InitStruct1);
-  //MX_TIM2_Init();
- // MX_TIM3_Init();
+  MX_TIM3_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_2);
+HAL_Delay(100);
+HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
-  /* ==========================================================
-   *  TEST MODE SWITCH
-   *  Set to 1 = encoder-only test (motor off, safe for wiring check)
-   *  Set to 0 = full PID demo with homing
-   * ========================================================== */
-  //#define ENCODER_TEST_MODE  0
-
-  /* ---- Start Encoder (TIM3) ---- */
-  //HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
-  //__HAL_TIM_SET_COUNTER(&htim3, 0);
-
-//#if !ENCODER_TEST_MODE
-
-  /* ---- Wake DRV8838 ---- */
-  //HAL_GPIO_WritePin(SLEEP_GPIO_Port, SLEEP_Pin, GPIO_PIN_SET);
-
-  /* ---- Start PWM with 0% duty ---- */
-  //__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-  //HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
-
-  /* ============================================================
-   *  HOMING SEQUENCE
-   *  Motor slowly reverses until KY-003 Hall sensor detects magnet.
-   *  KY-003: output = LOW when magnet is near (active-low).
-   *
-   *  In the real project, the slider moves backward along the rail
-   *  until it hits the home position (magnet at start of rail).
-   *  Then encoder is reset to 0 — this becomes the origin.
-   * ============================================================ */
-  //#define HOMING_PWM_DUTY  30   /* Slow speed for homing (0–99) */
-
-  /* Set direction = reverse (toward home) */
-  //HAL_GPIO_WritePin(PHASE_GPIO_Port, PHASE_Pin, GPIO_PIN_SET);   /* Reverse */
-  //__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, HOMING_PWM_DUTY);
-
-  /* Wait until Hall sensor triggers (LOW = magnet detected) */
-  //while (HAL_GPIO_ReadPin(HALL_SENSOR_GPIO_Port, HALL_SENSOR_Pin) == GPIO_PIN_SET)
-  //{
-  //    /* Still moving toward home... */
-  //    HAL_Delay(1);
-  //}
-
-  /* ---- Magnet detected! Stop motor ---- */
-  //__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);   /* PWM = 0 → stop */
-
-  /* ---- Reset encoder to 0 — this is now our origin ---- */
-  //__HAL_TIM_SET_COUNTER(&htim3, 0);
- // encoder_last_count = 0;
- // encoder_total      = 0;
-
-  /* ---- Reset PID state ---- */
-  /*pid.target_position  = 0;
-  pid.current_position = 0;
-  pid.error      = 0.0f;
-  pid.prev_error = 0.0f;
-  pid.integral   = 0.0f;
-  pid.derivative = 0.0f;
-  pid.output     = 0.0f;*/
-
-  /* Small delay after homing */
-  //HAL_Delay(500);
-
-  /* ---- Now start PID interrupt (closed-loop control begins) ---- */
-  //HAL_TIM_Base_Start_IT(&htim2);
-
-//#else
-  /* ---- Encoder test: keep DRV8838 sleeping (motor off) ---- */
-  //HAL_GPIO_WritePin(SLEEP_GPIO_Port, SLEEP_Pin, GPIO_PIN_RESET);
-//#endif
-
+char msg[64];
   /* USER CODE END 2 */
-
+previous_angle = get_angle();
+total_angle = 0.0f;
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-
-  /* ----- Debug variables: watch these in CLion ----- */
-  //volatile int32_t  debug_position = 0;   /* 32-bit accumulated position   */
-  //volatile uint16_t debug_raw      = 0;   /* Raw TIM3 counter (0~65535)    */
-
   while (1)
-  {
+  {    float current_angle = get_angle();
+
+    float delta = current_angle - previous_angle;
+
+    if (delta > 180.0f) delta -= 360.0f;
+    if (delta < -180.0f) delta += 360.0f;
+
+    total_angle += delta;
+    previous_angle = current_angle;
+
+    float distance_mm = total_angle * MM_PER_DEGREE;
+
+    int len = sprintf(msg, "Total Angle: %.2f deg | Distance: %.2f mm\r\n",
+                      total_angle, distance_mm);
+
+    HAL_UART_Transmit(&huart1, (uint8_t*)msg, len, 100);
+
+    HAL_Delay(100);
     /* USER CODE END WHILE */
-    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
 
-    HAL_Delay(1000);
-
-    /* Turn PC13 OFF */
-    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
-
-    HAL_Delay(1000);
-    HAL_GPIO_WritePin(MOTOR_PORT, MOTOR_PIN, GPIO_PIN_SET);
-
-    HAL_Delay(2000); // run for 2 seconds
-
-    /* Turn motor OFF */
-    HAL_GPIO_WritePin(MOTOR_PORT, MOTOR_PIN, GPIO_PIN_RESET);
-
-    HAL_Delay(2000); // off for 2 seconds
     /* USER CODE BEGIN 3 */
-
-/*#if ENCODER_TEST_MODE
-    debug_position = Encoder_GetPosition();
-    debug_raw      = __HAL_TIM_GET_COUNTER(&htim3);
-    HAL_Delay(100);*/
-
-//#else
-    /* ====== HOLD AT HOME POSITION (0) ======
-     * PID is running in TIM2 interrupt, holding position at 0.
-     * Hand-turn the motor shaft → PID will fight back and
-     * return to 0, demonstrating closed-loop disturbance rejection.
-     *
-     * Uncomment the demo steps below if you want to show
-     * multi-position movement before holding.
-     */
-
-    /*  --- Optional demo steps (uncomment to use) ---
-    pid.target_position = ENCODER_CPR;
-    HAL_Delay(3000);
-
-    pid.target_position = 0;
-    HAL_Delay(3000);
-
-    pid.target_position = ENCODER_CPR * 2;
-    HAL_Delay(3000);
-
-    pid.target_position = ENCODER_CPR / 2;
-    HAL_Delay(3000);
-    */
-
-    /* Hold at 0 forever — PID maintains position in background */
-  //  pid.target_position = 0;
-    //while (1) { }
-
-//#endif
-
- // }
+  }
   /* USER CODE END 3 */
 }
 
@@ -381,143 +178,159 @@ void SystemClock_Config(void)
   }
 }
 
-/* USER CODE BEGIN 4 */
-
 /**
- * @brief  Read 32-bit encoder position with 16-bit overflow tracking.
- *
- * TIM3 is a 16-bit counter (0‥65535).  When the motor spins continuously
- * the counter wraps around.  We detect the wrap by comparing the current
- * count to the previous count as a *signed* 16-bit delta.  This works
- * as long as the motor doesn't move more than 32767 counts between two
- * consecutive reads — at 1 kHz PID rate that allows up to ~24 revolutions
- * per second, well above the RS‑365PW's ~5 rev/s loaded speed.
- *
- * @retval 32-bit signed position in encoder counts.
- */
-int32_t Encoder_GetPosition(void)
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
 {
-    int16_t current_raw = (int16_t)__HAL_TIM_GET_COUNTER(&htim3);
-    int16_t delta       = current_raw - encoder_last_count;
-    encoder_last_count  = current_raw;
 
-    /* If motor forward makes encoder count negative, negate delta.
-     * Set ENCODER_DIR to -1 to invert, or +1 for normal.
-     * If motor still runs away in one direction, flip this sign. */
-    #define ENCODER_DIR  (-1)
-    encoder_total += (int32_t)(delta * ENCODER_DIR);
+  /* USER CODE BEGIN TIM3_Init 0 */
 
-    return encoder_total;
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 71;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 65535;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_IC_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim3, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+
 }
 
 /**
- * @brief  Compute one iteration of the PID controller.
- *
- * Standard discrete PID:
- *   error      = target − current
- *   integral  += error × dt
- *   derivative = (error − prev_error) / dt
- *   output     = Kp·error + Ki·integral + Kd·derivative
- *
- * Anti‑windup: integral is clamped to ±INTEGRAL_MAX so that
- * accumulated error during large setpoint changes doesn't cause
- * long overshoot.
- *
- * Dead‑band: if |error| ≤ DEADBAND, output is forced to 0 and
- * integral is cleared.  This prevents the motor from jittering
- * around the target position.
- */
-void PID_Compute(void)
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
 {
-    /* ----- Read current position ----- */
-    pid.current_position = Encoder_GetPosition();
 
-    /* ----- Error ----- */
-    pid.error = (float)(pid.target_position - pid.current_position);
+  /* USER CODE BEGIN USART1_Init 0 */
 
-    /* ----- Data Recording ----- */
-    /* Auto-trigger: start recording when disturbance is detected */
-    if (!rec_active && !rec_done &&
-        fabsf(pid.error) > (float)RECORD_TRIGGER_THRESHOLD)
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : PB12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+    static uint8_t state = 0;
+
+    if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)
     {
-        rec_active = 1;
-        rec_index  = 0;
-    }
-    /* Record one sample per PID tick (1 kHz) */
-    if (rec_active && !rec_done)
-    {
-        rec_target[rec_index] = pid.target_position;
-        rec_actual[rec_index] = pid.current_position;
-        rec_index++;
-        if (rec_index >= RECORD_SIZE)
+        uint32_t value = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+
+        if (state == 0)
         {
-            rec_active = 0;
-            rec_done   = 1;   /* ← Check this in debugger. 1 = data ready */
+            rising_edge = value;
+
+            __HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_2, TIM_INPUTCHANNELPOLARITY_FALLING);
+            state = 1;
+        }
+        else
+        {
+            falling_edge = value;
+
+            if (falling_edge >= rising_edge)
+                high_time = falling_edge - rising_edge;
+            else
+                high_time = (0xFFFF - rising_edge) + falling_edge;
+
+            period = __HAL_TIM_GET_AUTORELOAD(htim);
+
+            __HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_2, TIM_INPUTCHANNELPOLARITY_RISING);
+            state = 0;
         }
     }
-
-    /* ----- Dead‑band ----- */
-    if (fabsf(pid.error) <= (float)DEADBAND)
-    {
-        pid.output    = 0.0f;
-        pid.integral  = 0.0f;
-        pid.prev_error = pid.error;
-        Motor_SetOutput(0.0f);
-        return;
-    }
-
-    /* ----- Integral (with anti‑windup clamp) ----- */
-    pid.integral += pid.error * PID_DT;
-    if (pid.integral >  INTEGRAL_MAX) pid.integral =  INTEGRAL_MAX;
-    if (pid.integral < -INTEGRAL_MAX) pid.integral = -INTEGRAL_MAX;
-
-    /* ----- Derivative ----- */
-    pid.derivative = (pid.error - pid.prev_error) / PID_DT;
-
-    /* ----- PID output ----- */
-    pid.output = pid.kp * pid.error
-               + pid.ki * pid.integral
-               + pid.kd * pid.derivative;
-
-    /* ----- Save for next iteration ----- */
-    pid.prev_error = pid.error;
-
-    /* ----- Apply to motor ----- */
-    Motor_SetOutput(pid.output);
 }
 
-/**
- * @brief  Apply the PID output to the DRV8838 motor driver.
- *
- * @param  output  Signed PID output.
- *                  > 0 → forward  (PHASE = LOW,  EN = PWM)
- *                  < 0 → reverse  (PHASE = HIGH, EN = PWM)
- *
- * DRV8838 truth table:
- *   nSLEEP=1, PH=0, EN=PWM → OUT1=PWM, OUT2=LOW  (forward)
- *   nSLEEP=1, PH=1, EN=PWM → OUT1=LOW,  OUT2=PWM (reverse)
- */
-void Motor_SetOutput(float output)
+float get_angle(void)
 {
-    /* Determine direction */
-    if (output >= 0.0f)
-    {
-        HAL_GPIO_WritePin(PHASE_GPIO_Port, PHASE_Pin, GPIO_PIN_RESET);  /* Forward */
-    }
-    else
-    {
-        HAL_GPIO_WritePin(PHASE_GPIO_Port, PHASE_Pin, GPIO_PIN_SET);    /* Reverse */
-        output = -output;   /* Make positive for duty cycle */
-    }
+    if (period == 0) return 0.0f;
 
-    /* Clamp to PWM range */
-    uint32_t duty = (uint32_t)output;
-    if (duty > PWM_MAX) duty = PWM_MAX;
-
-    /* Set PWM duty cycle */
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, duty);
+    float duty = (float)high_time / (float)period;
+    return duty * 360.0f;
 }
-
 /* USER CODE END 4 */
 
 /**
