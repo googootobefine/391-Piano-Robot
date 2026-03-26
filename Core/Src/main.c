@@ -33,6 +33,12 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define MM_PER_DEGREE 0.111111f
+
+#define MOTOR_PIN GPIO_PIN_12
+#define MOTOR_PORT GPIOB
+
+#define MOTOR_PIN2 GPIO_PIN_13
+#define MOTOR_PORT2 GPIOB
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -41,15 +47,11 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-TIM_HandleTypeDef htim3;
+ADC_HandleTypeDef hadc1;
 
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-volatile uint32_t rising_edge = 0;
-volatile uint32_t falling_edge = 0;
-volatile uint32_t high_time = 0;
-volatile uint32_t period = 0;
 
 volatile float total_angle = 0;
 float previous_angle = 0;
@@ -58,10 +60,10 @@ float previous_angle = 0;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_TIM3_Init(void);
 static void MX_USART1_UART_Init(void);
+static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim);
+
 float get_angle(void);
 /* USER CODE END PFP */
 
@@ -100,21 +102,22 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_TIM3_Init();
   MX_USART1_UART_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
-HAL_TIM_IC_Start_IT(&htim3, TIM_CHANNEL_2);
-HAL_Delay(100);
+// Read initial angle so we start from 0
+// Read initial angle so we start from 0
+previous_angle = get_angle();
+total_angle = 0.0f;
 HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
 char msg[64];
   /* USER CODE END 2 */
-previous_angle = get_angle();
-total_angle = 0.0f;
+
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
-  {    float current_angle = get_angle();
+  {        float current_angle = get_angle();
 
     float delta = current_angle - previous_angle;
 
@@ -131,7 +134,21 @@ total_angle = 0.0f;
 
     HAL_UART_Transmit(&huart1, (uint8_t*)msg, len, 100);
 
-    HAL_Delay(100);
+   
+
+
+    if(distance_mm < -100.0f) {
+      HAL_GPIO_WritePin(MOTOR_PORT2, MOTOR_PIN2, GPIO_PIN_RESET);
+      HAL_Delay(50);
+      HAL_GPIO_WritePin(MOTOR_PORT, MOTOR_PIN, GPIO_PIN_SET);
+    }
+    else{
+      HAL_GPIO_WritePin(MOTOR_PORT, MOTOR_PIN, GPIO_PIN_RESET);
+      HAL_Delay(50);
+      HAL_GPIO_WritePin(MOTOR_PORT2, MOTOR_PIN2, GPIO_PIN_SET);
+    }
+
+  
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -147,6 +164,7 @@ void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
@@ -157,7 +175,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -172,57 +190,62 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
+  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV2;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
   }
 }
 
 /**
-  * @brief TIM3 Initialization Function
+  * @brief ADC1 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_TIM3_Init(void)
+static void MX_ADC1_Init(void)
 {
 
-  /* USER CODE BEGIN TIM3_Init 0 */
+  /* USER CODE BEGIN ADC1_Init 0 */
 
-  /* USER CODE END TIM3_Init 0 */
+  /* USER CODE END ADC1_Init 0 */
 
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_IC_InitTypeDef sConfigIC = {0};
+  ADC_ChannelConfTypeDef sConfig = {0};
 
-  /* USER CODE BEGIN TIM3_Init 1 */
+  /* USER CODE BEGIN ADC1_Init 1 */
 
-  /* USER CODE END TIM3_Init 1 */
-  htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 71;
-  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 65535;
-  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_IC_Init(&htim3) != HAL_OK)
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Common config
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
   }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
-  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
-  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
-  sConfigIC.ICFilter = 0;
-  if (HAL_TIM_IC_ConfigChannel(&htim3, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM3_Init 2 */
 
-  /* USER CODE END TIM3_Init 2 */
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_7;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
 
 }
 
@@ -277,10 +300,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PB12 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12;
+  /*Configure GPIO pins : PB12 PB13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -292,44 +315,26 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
-{
-    static uint8_t state = 0;
 
-    if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2)
-    {
-        uint32_t value = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
-
-        if (state == 0)
-        {
-            rising_edge = value;
-
-            __HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_2, TIM_INPUTCHANNELPOLARITY_FALLING);
-            state = 1;
-        }
-        else
-        {
-            falling_edge = value;
-
-            if (falling_edge >= rising_edge)
-                high_time = falling_edge - rising_edge;
-            else
-                high_time = (0xFFFF - rising_edge) + falling_edge;
-
-            period = __HAL_TIM_GET_AUTORELOAD(htim);
-
-            __HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_2, TIM_INPUTCHANNELPOLARITY_RISING);
-            state = 0;
-        }
-    }
-}
 
 float get_angle(void)
 {
-    if (period == 0) return 0.0f;
+    uint32_t adc_raw = 0;
+    float voltage = 0.0f;
+    float angle = 0.0f;
 
-    float duty = (float)high_time / (float)period;
-    return duty * 360.0f;
+    // Start ADC conversion
+    HAL_ADC_Start(&hadc1);
+
+    // Wait for conversion to finish (timeout 10ms)
+    if(HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
+    {
+        adc_raw = HAL_ADC_GetValue(&hadc1);  // 12-bit value 0-4095
+        voltage = (float)adc_raw / 4095.0f * 3.3f; // assuming Vref = 3.3V
+        angle = voltage / 3.3f * 360.0f;  // scale voltage to 0-360°
+    }
+
+    return angle;
 }
 /* USER CODE END 4 */
 
