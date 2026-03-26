@@ -32,6 +32,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+
+//=========MOTOR DEFINITION=========//
 #define MM_PER_DEGREE 0.111111f
 
 #define MOTOR_PIN GPIO_PIN_12
@@ -39,6 +41,28 @@
 
 #define MOTOR_PIN2 GPIO_PIN_13
 #define MOTOR_PORT2 GPIOB
+
+/* ==================== PID Gains ==================== */
+/* Start with these, tune on real hardware:             */
+/*   Kp: increase until fast response without overshoot */
+/*   Ki: increase to eliminate steady‑state error       */
+/*   Kd: increase to dampen oscillation                 */
+#define PID_KP               5.0f
+#define PID_KI               0.01f
+#define PID_KD               0.1f
+
+/* ==================== PID Timing ==================== */
+/* TIM2 update fires at ~10 kHz.  We only run PID every */
+/* PID_DIVIDER ticks → PID freq ≈ 1 kHz.                */
+#define PID_DIVIDER          10
+#define PID_DT               (1.0f / 1000.0f)   /* 1 ms */
+
+/* Integral anti‑windup clamp                           */
+#define INTEGRAL_MAX         5000.0f
+
+/* Dead‑band: if |error| <= this, stop the motor        */
+#define DEADBAND             2.0f
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,8 +77,18 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
+//angle tracking variables
 volatile float total_angle = 0;
 float previous_angle = 0;
+
+float target_position = 0.0f;   // mm
+
+//pid variables
+float pid_error = 0;
+float pid_integral = 0;
+float pid_derivative = 0;
+float pid_prev_error = 0;
+float pid_output = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -345,7 +379,12 @@ float get_angle(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
+    int len = sprintf(msg, "ERROR\r\n",
+                      );
+
+    HAL_UART_Transmit(&huart1, (uint8_t*)msg, len, 100);
   /* User can add his own implementation to report the HAL error return state */
+
   __disable_irq();
   while (1)
   {
