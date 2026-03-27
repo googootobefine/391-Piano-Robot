@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -38,9 +39,12 @@
 
 #define MOTOR_PIN GPIO_PIN_12
 #define MOTOR_PORT GPIOB
-
 #define MOTOR_PIN2 GPIO_PIN_13
 #define MOTOR_PORT2 GPIOB
+
+//LED for debugging
+#define LED_PIN GPIO_PIN_13
+#define LED_PORT GPIOC
 
 /* ==================== PID Gains ==================== */
 /* Start with these, tune on real hardware:             */
@@ -73,6 +77,8 @@
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
 
+TIM_HandleTypeDef htim3;
+
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
@@ -82,6 +88,7 @@ volatile float total_angle = 0;
 float previous_angle = 0;
 
 float target_position = 0.0f;   // mm
+char msg[64];
 
 //pid variables
 float pid_error = 0;
@@ -96,9 +103,12 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 
 float get_angle(void);
+void Motor_SetOutput(float output);
+void Update_Position(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -138,50 +148,27 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();
   MX_ADC1_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-// Read initial angle so we start from 0
+HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // Ensure LED is off at start - ACTIVE LOW
+//Start PWM channels for motor control
+HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+
 // Read initial angle so we start from 0
 previous_angle = get_angle();
 total_angle = 0.0f;
 HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
-char msg[64];
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
-  {        float current_angle = get_angle();
-
-    float delta = current_angle - previous_angle;
-
-    if (delta > 180.0f) delta -= 360.0f;
-    if (delta < -180.0f) delta += 360.0f;
-
-    total_angle += delta;
-    previous_angle = current_angle;
-
-    float distance_mm = total_angle * MM_PER_DEGREE;
-
-    int len = sprintf(msg, "Total Angle: %.2f deg | Distance: %.2f mm\r\n",
-                      total_angle, distance_mm);
-
-    HAL_UART_Transmit(&huart1, (uint8_t*)msg, len, 100);
-
-   
-
-
-    if(distance_mm < -100.0f) {
-      HAL_GPIO_WritePin(MOTOR_PORT2, MOTOR_PIN2, GPIO_PIN_RESET);
-      HAL_Delay(50);
-      HAL_GPIO_WritePin(MOTOR_PORT, MOTOR_PIN, GPIO_PIN_SET);
-    }
-    else{
-      HAL_GPIO_WritePin(MOTOR_PORT, MOTOR_PIN, GPIO_PIN_RESET);
-      HAL_Delay(50);
-      HAL_GPIO_WritePin(MOTOR_PORT2, MOTOR_PIN2, GPIO_PIN_SET);
-    }
-
+  {
+    Update_Position();
+  Motor_SetOutput(1.0f);
   
     /* USER CODE END WHILE */
 
@@ -284,6 +271,59 @@ static void MX_ADC1_Init(void)
 }
 
 /**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 7199;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 500;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
   * @brief USART1 Initialization Function
   * @param None
   * @retval None
@@ -329,15 +369,26 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PB12 PB13 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13;
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : PC13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB14 PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -370,6 +421,75 @@ float get_angle(void)
 
     return angle;
 }
+void Motor_SetOutput(float output)
+{
+    // Clamp to safe range (-1 to 1)
+    if (output > 1.0f) output = 1.0f;
+    if (output < -1.0f) output = -1.0f;
+
+    uint32_t arr = __HAL_TIM_GET_AUTORELOAD(&htim3);
+    uint32_t pwm = (uint32_t)(fabsf(output) * arr);
+
+    if (output > 0)
+    {
+        // Forward
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, pwm); // PB0 (IN1)
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);   // PB1 (IN2)
+    }
+    else if (output < 0)
+    {
+        // Reverse
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 0);   // PB0 (IN1)
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pwm); // PB1 (IN2)
+    }
+    else
+    {
+        // Stop
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 0);
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
+    }
+}
+/*float PID_Compute(float current_position)
+{
+    float error = target_position - current_position;
+
+    // Integral
+    pid_integral += error * PID_DT;
+
+    if (pid_integral > INTEGRAL_MAX) pid_integral = INTEGRAL_MAX;
+    if (pid_integral < -INTEGRAL_MAX) pid_integral = -INTEGRAL_MAX;
+
+    // Derivative
+    float derivative = (error - pid_prev_error) / PID_DT;
+
+    // PID output
+    float output = PID_KP * error
+                 + PID_KI * pid_integral
+                 + PID_KD * derivative;
+
+    pid_prev_error = error;
+
+    return output;
+}*/
+
+void Update_Position(void){
+    float current_angle = get_angle();
+
+    float delta = current_angle - previous_angle;
+
+    if (delta > 180.0f) delta -= 360.0f;
+    if (delta < -180.0f) delta += 360.0f;
+
+    total_angle += delta;
+    previous_angle = current_angle;
+
+    float distance_mm = total_angle * MM_PER_DEGREE;
+
+    int len = sprintf(msg, "Total Angle: %.2f deg | Distance: %.2f mm\r\n",
+                      total_angle, distance_mm);
+
+    HAL_UART_Transmit(&huart1, (uint8_t*)msg, len, 100);
+}
 /* USER CODE END 4 */
 
 /**
@@ -379,15 +499,16 @@ float get_angle(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-    int len = sprintf(msg, "ERROR\r\n",
-                      );
-
-    HAL_UART_Transmit(&huart1, (uint8_t*)msg, len, 100);
+ 
   /* User can add his own implementation to report the HAL error return state */
 
   __disable_irq();
   while (1)
   {
+    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+    HAL_Delay(500);
+    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
+    HAL_Delay(500);
   }
   /* USER CODE END Error_Handler_Debug */
 }
