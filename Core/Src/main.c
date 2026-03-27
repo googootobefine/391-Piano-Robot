@@ -34,13 +34,25 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 
-//=========MOTOR DEFINITION=========//
+//=========MOTO DEFINITION=========//
 #define MM_PER_DEGREE 0.111111f
 
 #define MOTOR_PIN GPIO_PIN_12
 #define MOTOR_PORT GPIOB
 #define MOTOR_PIN2 GPIO_PIN_13
 #define MOTOR_PORT2 GPIOB
+
+//Solenoid GPIO for Actuator
+#define SOLENOID_PIN GPIO_PIN_14
+#define SOLENOID_PORT GPIOB
+#define SOLENOID_PIN2 GPIO_PIN_15
+#define SOLENOID_PORT2 GPIOB
+
+#define WHITE_KEY 0
+#define BLACK_KEY 1
+#define SHORT_PRESS 1
+#define LONG_PRESS 5
+
 
 //LED for debugging
 #define LED_PIN GPIO_PIN_13
@@ -109,6 +121,8 @@ static void MX_TIM3_Init(void);
 float get_angle(void);
 void Motor_SetOutput(float output);
 void Update_Position(void);
+void press(int finger, int duration);
+float PID_Compute(float current_position);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -167,9 +181,20 @@ HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    Update_Position();
-  Motor_SetOutput(1.0f);
-  
+   Update_Position();
+  Motor_SetOutput(0.99f); //test PWM
+  HAL_Delay(2000);
+  Motor_SetOutput(-0.99f);
+  HAL_Delay(2000);
+  Motor_SetOutput(0.0f);
+  HAL_Delay(2000);
+  Motor_SetOutput(0.5f);
+  HAL_Delay(2000);
+  Motor_SetOutput(-0.5f);
+  HAL_Delay(2000);
+ // __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 100);
+//__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -289,9 +314,9 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 7199;
+  htim3.Init.Prescaler = 159;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 500;
+  htim3.Init.Period = 199;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
@@ -449,7 +474,7 @@ void Motor_SetOutput(float output)
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
     }
 }
-/*float PID_Compute(float current_position)
+float PID_Compute(float current_position)
 {
     float error = target_position - current_position;
 
@@ -470,7 +495,7 @@ void Motor_SetOutput(float output)
     pid_prev_error = error;
 
     return output;
-}*/
+}
 
 void Update_Position(void){
     float current_angle = get_angle();
@@ -488,7 +513,21 @@ void Update_Position(void){
     int len = sprintf(msg, "Total Angle: %.2f deg | Distance: %.2f mm\r\n",
                       total_angle, distance_mm);
 
-    HAL_UART_Transmit(&huart1, (uint8_t*)msg, len, 100);
+   // HAL_UART_Transmit(&huart1, (uint8_t*)msg, len, 100);
+}
+
+void press(int finger, int duration){
+    //Activate solenoid to press key
+    if(finger == WHITE_KEY){
+        HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
+        HAL_Delay(duration*100);
+        HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+    }
+    else{
+        HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_SET);
+        HAL_Delay(duration*100);
+        HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
+    }
 }
 /* USER CODE END 4 */
 
