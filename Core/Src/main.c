@@ -63,9 +63,9 @@
 /*   Kp: increase until fast response without overshoot */
 /*   Ki: increase to eliminate steady‑state error       */
 /*   Kd: increase to dampen oscillation                 */
-#define PID_KP               5.0f
-#define PID_KI               0.01f
-#define PID_KD               0.1f
+#define PID_KP               1.5f
+#define PID_KI               0.02f //oscillation around 0.04 or 0.05
+#define PID_KD               0.3f
 
 /* ==================== PID Timing ==================== */
 /* TIM2 update fires at ~10 kHz.  We only run PID every */
@@ -108,6 +108,11 @@ float pid_integral = 0;
 float pid_derivative = 0;
 float pid_prev_error = 0;
 float pid_output = 0;
+
+uint32_t hold_start_time = 0;
+uint8_t holding = 0;
+float current_position = 0.0f;
+uint32_t last_pid_time = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -172,36 +177,60 @@ HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 // Read initial angle so we start from 0
 previous_angle = get_angle();
 total_angle = 0.0f;
-HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
+//HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
-
+float targets[] = {50.0f, 100.0f, 0.0f, 150.0f,175.0f};  // Example target positions in mm
+int current_target_index = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-   Update_Position();
-  Motor_SetOutput(0.99f); //test PWM
-  HAL_Delay(2000);
-  Motor_SetOutput(-0.99f);
-  HAL_Delay(2000);
-  Motor_SetOutput(0.0f);
-  HAL_Delay(2000);
-  Motor_SetOutput(0.5f);
-  HAL_Delay(2000);
-  Motor_SetOutput(-0.5f);
-  HAL_Delay(2000);
- // __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 100);
-//__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
+    Update_Position();
+    current_position = total_angle * MM_PER_DEGREE;
+
+    
+
+    // Run PID at 1 kHz
+target_position = targets[current_target_index];
+
+float error = target_position - current_position;
+if (!holding)
+{
+    if (fabsf(error) < DEADBAND)
+    {
+        Motor_SetOutput(0);
+        pid_integral = 0;
+
+        holding = 1;
+        hold_start_time = HAL_GetTick();
+    }
+    else
+    {
+        float output = PID_Compute(current_position);
+        Motor_SetOutput(output);
+    }
+}
+else
+{
+    if (HAL_GetTick() - hold_start_time > 500)
+    {
+        holding = 0;
+        current_target_index++;
+
+        if (current_target_index >= 5)
+            current_target_index = 0;
+    }
+}
 
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
-}
 
+}
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -318,7 +347,7 @@ static void MX_TIM3_Init(void)
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = 199;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
     Error_Handler();
@@ -485,7 +514,13 @@ float PID_Compute(float current_position)
     if (pid_integral < -INTEGRAL_MAX) pid_integral = -INTEGRAL_MAX;
 
     // Derivative
-    float derivative = (error - pid_prev_error) / PID_DT;
+    static float filtered_derivative = 0;
+float raw_derivative = (error - pid_prev_error) / PID_DT;
+
+// Low-pass filter (alpha = 0.1–0.2)
+filtered_derivative = 0.1f * raw_derivative + 0.9f * filtered_derivative;
+
+float derivative = filtered_derivative;
 
     // PID output
     float output = PID_KP * error
