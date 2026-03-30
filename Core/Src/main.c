@@ -54,6 +54,7 @@
 #define LONG_PRESS 5
 
 //note definitions 
+//L is low, h is high, hh is super high
 #define LB   0
 #define LDs  0   // D#
 #define LC   1
