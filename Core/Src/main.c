@@ -53,6 +53,38 @@
 #define SHORT_PRESS 1
 #define LONG_PRESS 5
 
+//note definitions 
+#define LB   0
+#define LDs  0   // D#
+#define LC   1
+#define D    2
+#define Fs   2   // F#
+#define E    3
+#define Gs   3   // G#
+#define F    4
+#define As   4   // A#
+#define G    5
+#define A    6
+#define Cs   6   // C#
+#define B    7
+#define Ds   7   // D#
+#define C    8
+#define hD   9
+#define hFs  9
+#define hE   10
+#define hGs  10
+#define hF   11
+#define hAs  11
+#define hG   12
+#define hA   13
+#define hCs  13
+#define hB   14
+#define hDs  14
+#define hC   15
+#define hhD  16
+#define hhFs 16
+#define hhE  17
+#define hhGs 17
 
 //LED for debugging
 #define LED_PIN GPIO_PIN_13
@@ -94,6 +126,29 @@ TIM_HandleTypeDef htim3;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
+
+//key position array
+// distances in mm
+float positions[] = {
+    18.0,  // 0: LB / LD#
+    30.0,  // 1: LC
+    42.0,  // 2: D / F#
+    64.0,  // 3: E / G#
+    86.0,  // 4: F / A#
+    108.0, // 5: G
+    130.0, // 6: A / C#
+    152.0, // 7: B / D#
+    174.0, // 8: C
+    196.0, // 9: hD / hF#
+    218.0, // 10: hE / hG#
+    240.0, // 11: hF / hA#
+    262.0, // 12: hG
+    284.0, // 13: hA / hC#
+    306.0, // 14: hB / hD#
+    328.0, // 15: hC
+    350.0, // 16: hhD / hhF#
+    372.0  // 17: hhE / hhG#
+};
 
 //angle tracking variables
 volatile float total_angle = 0;
