@@ -63,9 +63,9 @@
 /*   Kp: increase until fast response without overshoot */
 /*   Ki: increase to eliminate steady‑state error       */
 /*   Kd: increase to dampen oscillation                 */
-#define PID_KP               1.5f
-#define PID_KI               0.02f //oscillation around 0.04 or 0.05
-#define PID_KD               0.3f
+#define PID_KP               0.6f
+#define PID_KI               0.005f //oscillation around 0.04 or 0.05
+#define PID_KD               0.06f
 
 /* ==================== PID Timing ==================== */
 /* TIM2 update fires at ~10 kHz.  We only run PID every */
@@ -77,7 +77,7 @@
 #define INTEGRAL_MAX         5000.0f
 
 /* Dead‑band: if |error| <= this, stop the motor        */
-#define DEADBAND             2.0f
+#define DEADBAND             5.0f
 
 /* USER CODE END PD */
 
@@ -113,6 +113,11 @@ uint32_t hold_start_time = 0;
 uint8_t holding = 0;
 float current_position = 0.0f;
 uint32_t last_pid_time = 0;
+
+float targets[] = {50.0f, 100.0f, 0.0f, 150.0f,175.0f};  // Example target positions in mm
+int current_target_index = 0;
+
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -128,6 +133,7 @@ void Motor_SetOutput(float output);
 void Update_Position(void);
 void press(int finger, int duration);
 float PID_Compute(float current_position);
+//void Run_PID(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -179,8 +185,7 @@ previous_angle = get_angle();
 total_angle = 0.0f;
 //HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
-float targets[] = {50.0f, 100.0f, 0.0f, 150.0f,175.0f};  // Example target positions in mm
-int current_target_index = 0;
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -222,13 +227,12 @@ else
         if (current_target_index >= 5)
             current_target_index = 0;
     }
-}
-
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
+}
 
 }
 /**
@@ -313,7 +317,7 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_7;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_71CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -531,7 +535,6 @@ float derivative = filtered_derivative;
 
     return output;
 }
-
 void Update_Position(void){
     float current_angle = get_angle();
 
@@ -564,6 +567,44 @@ void press(int finger, int duration){
         HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
     }
 }
+
+/*void Run_PID(void){
+  current_position = total_angle * MM_PER_DEGREE;
+  // Run PID at 1 kHz
+ 
+
+  float error = target_position - current_position;
+  if (!holding)
+  {
+    if (fabsf(error) < DEADBAND)
+    {
+        Motor_SetOutput(0);
+        pid_integral = 0;
+
+        holding = 1;
+        hold_start_time = HAL_GetTick();
+    }
+    else
+    {
+        float output = PID_Compute(current_position);
+        Motor_SetOutput(output);
+    }
+  }
+  else
+  {
+    if (HAL_GetTick() - hold_start_time > 500)
+    {
+        holding = 0;
+
+    }
+  }
+
+} */
+
+/*void play_note(int note, int duration){
+
+}*/
+
 /* USER CODE END 4 */
 
 /**
