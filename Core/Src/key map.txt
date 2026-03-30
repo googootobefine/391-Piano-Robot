@@ -1,0 +1,51 @@
+white keys: 2.2cm
+gap: 0.2cm
+black keys: 0.9cm
+gap small: 1.7cm
+gap big: 3.2cm
+
+start + 1.8cm -> B and D#
+
+L->low
+h->high
+hh->so high
+
+1.8cm: LB (LD#)
+3cm: LC
+4.2cm: D (F#)
+6.4cm: E (G#)
+8.6cm: F (A#)
+10.8cm: G
+13cm: A (C#)
+15.2cm: B (D#)
+17.4cm: C
+19.6cm: hD (hF#)
+21.8cm: hE (hG#)
+24cm: hF (hA#)
+26.2cm: hG
+28.4cm: hA (hC#)
+30.6cm: hB (hD#)
+32.8cm: hC
+35cm: hhD (hhF#)s
+37.2cm: hhE (hhG#)
+
+song note map:
+C# 
+hC# hB hF# hD hC# hB hF# hD
+hA hG hD B hA hG hD
+hG hF# hD B G
+
+F# G A B C# hD hE hF#
+hC# hB hF# hD hC# hB hF# hD
+hA hG hD B hA hG hD
+hG hF# hD B G
+
+F# G A B C# hD hE hF#
+hF# hE hD B
+B
+hF# hE hE B hE B
+
+hF# hE hD C#
+B C# hD hE hF#
+B C# hD hE hF# hA hF# hA
+hF# hG hF# hG hF# hG hF#
