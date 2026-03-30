@@ -205,7 +205,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-//am i still here
+  //am i still here
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -231,15 +231,15 @@ int main(void)
   MX_ADC1_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // Ensure LED is off at start - ACTIVE LOW
-//Start PWM channels for motor control
-HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
-HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+  HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // Ensure LED is off at start - ACTIVE LOW
+  //Start PWM channels for motor control
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 
-// Read initial angle so we start from 0
-previous_angle = get_angle();
-total_angle = 0.0f;
-//HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
+  // Read initial angle so we start from 0
+  previous_angle = get_angle();
+  total_angle = 0.0f;
+  //HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
 
   /* USER CODE END 2 */
@@ -254,40 +254,40 @@ total_angle = 0.0f;
     
 
     // Run PID at 1 kHz
-target_position = targets[current_target_index];
+    target_position = targets[current_target_index];
 
-float error = target_position - current_position;
-if (!holding)
-{
-    if (fabsf(error) < DEADBAND)
+    float error = target_position - current_position;
+    if (!holding)
     {
-        Motor_SetOutput(0);
-        pid_integral = 0;
-
-        holding = 1;
-        hold_start_time = HAL_GetTick();
+        if (fabsf(error) < DEADBAND)
+        {
+            Motor_SetOutput(0);
+            pid_integral = 0;
+    
+            holding = 1;
+            hold_start_time = HAL_GetTick();
+        }
+        else
+        {
+            float output = PID_Compute(current_position);
+            Motor_SetOutput(output);
+        }
     }
     else
     {
-        float output = PID_Compute(current_position);
-        Motor_SetOutput(output);
-    }
-}
-else
-{
-    if (HAL_GetTick() - hold_start_time > 500)
-    {
-        holding = 0;
-        current_target_index++;
-
-        if (current_target_index >= 5)
-            current_target_index = 0;
-    }
-    /* USER CODE END WHILE */
-
-    /* USER CODE BEGIN 3 */
-  }
-  /* USER CODE END 3 */
+        if (HAL_GetTick() - hold_start_time > 500)
+        {
+            holding = 0;
+            current_target_index++;
+    
+            if (current_target_index >= 5)
+                current_target_index = 0;
+        }
+        /* USER CODE END WHILE */
+    
+        /* USER CODE BEGIN 3 */
+      }
+      /* USER CODE END 3 */
 }
 
 }
