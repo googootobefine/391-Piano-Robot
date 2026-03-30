@@ -172,6 +172,12 @@ uint32_t last_pid_time = 0;
 
 float targets[] = {50.0f, 100.0f, 0.0f, 150.0f,175.0f};  // Example target positions in mm
 int current_target_index = 0;
+float trialBar[] = {positions[Cs], positions[hCs], positions[hB], positions[hFs], positions[hD], positions[hCs], 
+  positions[hB], positions[hFs], positions[hD]};
+int current_target_index = 0;
+float BW[] = {BLACK_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY};
+float timing[] = {SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS};
+
 
 
 /* USER CODE END PV */
@@ -254,7 +260,7 @@ int main(void)
     
 
     // Run PID at 1 kHz
-    target_position = targets[current_target_index];
+    target_position = trialBar[current_target_index]; //targets[current_target_index];
 
     float error = target_position - current_position;
     if (!holding)
@@ -280,7 +286,7 @@ int main(void)
             holding = 0;
             current_target_index++;
     
-            if (current_target_index >= 5)
+            if (current_target_index >= 9)
                 current_target_index = 0;
         }
         /* USER CODE END WHILE */
