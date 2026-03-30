@@ -1,0 +1,118 @@
+Test 1:
+Kp = 1.5 -> 1.0
+KI = 0.02
+Kd = 0.3
+Outcome: pretty good error - encoder is being weird, still could have less error
+
+Test 2:
+Kp = 1.0
+KI = 0.02 -> 0.04
+Kd = 0.3
+Outcome: Much better error - Best one
+
+Test 3: Try to make it faster
+Kp = 1.0
+KI = 0.04
+Kd = 0.3 -> 0.5
+Outcome: It got slower
+
+Test 4: Try to make it faster
+Kp = 1.0
+KI = 0.04
+Kd = 0.5 -> 0.1
+Outcome: Faster but much higher error
+
+Test 5: Try to make it faster
+Kp = 1.0
+KI = 0.04
+Kd = 0.1 -> 0.2
+Outcome: WTF? error is going crazy
+
+Test 6: Try to make it faster
+Kp = 1.0
+KI = 0.04
+Kd = 0.2
+Outcome: Pretty good confused?
+
+Test 7: Try to make it faster
+Kp = 1.5
+KI = 0.04
+Kd = 0.3
+Outcome: still some error
+
+Test 8: Try to make it faster
+Kp = 1.5
+KI = 0.04 -> 0.06
+Kd = 0.3
+Outcome: great error but too much oscillation
+
+Test 9: Testing the new analog reading and holding the motor better
+Kp = 1.5
+KI = 0.02
+Kd = 0.3
+Outcome: so much ocsilation
+
+Test 10: Testing the new analog reading and holding the motor better
+Kp = 1.5
+KI = 0.04
+Kd = 0.3 -> 0.5
+Outcome: so slow
+
+Test 11: Testing the new analog reading and holding the motor better
+Kp = 1.5
+KI = 0.04
+Kd = 0.3 -> 0.5
+Outcome: so slow
+
+Test 12:
+change dead band -> 5mm
+
+Test 13: 
+Kp = 1.5
+KI = 0.04 -> 0.01
+Kd = 0.5
+Outcome: wtf is happening
+
+Test 14: 
+Kp = 1.5
+KI = 0.04
+Kd = 0.3
+Outcome: gros pet
+
+Test 15: For now For now
+Kp = 2
+KI = 0.04
+Kd = 0.3
+Outcome: better ocsillation
+
+Test 16: For now For now
+Kp = 2
+KI = 0.04
+Kd = 0.3
+Outcome: better oscillation
+
+Test 17: 
+Kp = 0.5
+KI = 0.05
+Kd = 0.3
+Outcome: best error
+
+Test 18: 
+Kp = 0.8
+KI = 0.05
+Kd = 0.3
+Outcome: worse than 0.5
+
+
+
+
+
+
+
+
+
+
+
+
+
+
