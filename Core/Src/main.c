@@ -301,7 +301,7 @@ int main(void)
             holding = 0;
             current_target_index++;
     
-            if (current_target_index >= 9)
+            if (current_target_index >= 21)
                 current_target_index = 0;
         }
         /* USER CODE END WHILE */
