@@ -51,41 +51,42 @@
 #define WHITE_KEY 0
 #define BLACK_KEY 1
 #define SHORT_PRESS 1
+#define MID_PRESS 3
 #define LONG_PRESS 5
 
 //note definitions 
 //L is low, h is high, hh is super high
-#define LB   0
-#define LDs  0   // D#
-#define LC   1
-#define D    2
-#define Fs   2   // F#
-#define E    3
-#define Gs   3   // G#
-#define F    4
-#define As   4   // A#
-#define G    5
-#define A    6
-#define Cs   6   // C#
-#define B    7
-#define Ds   7   // D#
-#define C    8
-#define hD   9
-#define hFs  9
-#define hE   10
-#define hGs  10
-#define hF   11
-#define hAs  11
-#define hG   12
-#define hA   13
-#define hCs  13
-#define hB   14
-#define hDs  14
-#define hC   15
-#define hhD  16
-#define hhFs 16
-#define hhE  17
-#define hhGs 17
+#define LB   18.0f
+#define LDs  18.0f   // D#
+#define LC   30.0f
+#define D    42.0f
+#define Fs   42.0f   // F#
+#define E    64.0f
+#define Gs   64.0f   // G#
+#define F    86.0f
+#define As   86.0f   // A#
+#define G    108.0f
+#define A    130.0f
+#define Cs   130.0f   // C#
+#define B    152.0f
+#define Ds   152.0f   // D#
+#define C    174.0f
+#define hD   196.0f
+#define hFs  196.0f
+#define hE   218.0f
+#define hGs  218.0f
+#define hF   240.0f
+#define hAs  240.0f
+#define hG   262.0f
+#define hA   284.0f
+#define hCs  284.0f
+#define hB   306.0f
+#define hDs  306.0f
+#define hC   328.0f
+#define hhD  350.0f
+#define hhFs 350.0f
+#define hhE  372.0f
+#define hhGs 372.0f
 
 //LED for debugging
 #define LED_PIN GPIO_PIN_13
@@ -128,29 +129,6 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
-//key position array
-// distances in mm
-float positions[] = {
-    18.0,  // 0: LB / LD#
-    30.0,  // 1: LC
-    42.0,  // 2: D / F#
-    64.0,  // 3: E / G#
-    86.0,  // 4: F / A#
-    108.0, // 5: G
-    130.0, // 6: A / C#
-    152.0, // 7: B / D#
-    174.0, // 8: C
-    196.0, // 9: hD / hF#
-    218.0, // 10: hE / hG#
-    240.0, // 11: hF / hA#
-    262.0, // 12: hG
-    284.0, // 13: hA / hC#
-    306.0, // 14: hB / hD#
-    328.0, // 15: hC
-    350.0, // 16: hhD / hhF#
-    372.0  // 17: hhE / hhG#
-};
-
 //angle tracking variables
 volatile float total_angle = 0;
 float previous_angle = 0;
@@ -172,12 +150,49 @@ uint32_t last_pid_time = 0;
 
 float targets[] = {50.0f, 100.0f, 0.0f, 150.0f,175.0f};  // Example target positions in mm
 int current_target_index = 0;
-float trialBar[] = {positions[Cs], positions[hCs], positions[hB], positions[hFs], positions[hD], positions[hCs], 
-  positions[hB], positions[hFs], positions[hD]};
-int current_target_index = 0;
-float BW[] = {BLACK_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY};
-float timing[] = {SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS};
+float trialBar[] = {Cs, hCs, hB, hFs, hD, hCs, 
+  hB, hFs, hD, hA, hG, hD, B, hA, hG, hD,
+  hG, hFs, hD, B, G}; // first part
 
+float secondBar[] = {Fs, G, A, B, Cs, hD,
+  hE, hFs}; //middle transition
+
+float thirdBar[] = {hCs, hB, hFs, hD, hCs, 
+  hB, hFs, hD, hA, hG, hD, hG, hFs, 
+  hD, B, G};
+
+float fourthBar[] = {Fs, G, A, B, Cs, hD,
+  hE, hFs,
+  hFs, hE, hD, B, B, hFs,
+  hE, hE, B, hE, B};
+
+float fifthBar[] = {hFs, hE, hD, Cs, B,
+  Cs, hD, hE, hFs, 
+  B, Cs, hD, hE, hFs, hA, hFs, hA,
+  hFs, hG, hFs, hG, hFs, hG, hFs};
+
+int current_target_index = 0;
+float BW1[] = {BLACK_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY,
+  WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY,
+  WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY};
+
+float BW2[] = {BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY};
+
+float BW3[] = {BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY,
+  WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY,
+  WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY};
+
+float BW4[] = {BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, 
+  BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY};
+
+float BW5[] = {BLACK_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY,
+  WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY};
+
+float timing1[] = {LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS};
+float timing2[] = {MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS};
+float timing3[] = {LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS};
+float timing4[] = {MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, SHORT_PRESS, SHORT_PRESS, SHORT_PRESS};
+float timing5[] = {LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS};
 
 
 /* USER CODE END PV */
