@@ -51,42 +51,8 @@
 #define WHITE_KEY 0
 #define BLACK_KEY 1
 #define SHORT_PRESS 1
-#define MID_PRESS 3
 #define LONG_PRESS 5
 
-//note definitions 
-//L is low, h is high, hh is super high
-#define LB   18.0f
-#define LDs  18.0f   // D#
-#define LC   30.0f
-#define D    42.0f
-#define Fs   42.0f   // F#
-#define E    64.0f
-#define Gs   64.0f   // G#
-#define F    86.0f
-#define As   86.0f   // A#
-#define G    108.0f
-#define A    130.0f
-#define Cs   130.0f   // C#
-#define B    152.0f
-#define Ds   152.0f   // D#
-#define C    174.0f
-#define hD   196.0f
-#define hFs  196.0f
-#define hE   218.0f
-#define hGs  218.0f
-#define hF   240.0f
-#define hAs  240.0f
-#define hG   262.0f
-#define hA   284.0f
-#define hCs  284.0f
-#define hB   306.0f
-#define hDs  306.0f
-#define hC   328.0f
-#define hhD  350.0f
-#define hhFs 350.0f
-#define hhE  372.0f
-#define hhGs 372.0f
 
 //LED for debugging
 #define LED_PIN GPIO_PIN_13
@@ -97,9 +63,9 @@
 /*   Kp: increase until fast response without overshoot */
 /*   Ki: increase to eliminate steady‑state error       */
 /*   Kd: increase to dampen oscillation                 */
-#define PID_KP               0.6f
-#define PID_KI               0.005f //oscillation around 0.04 or 0.05
-#define PID_KD               0.06f
+#define PID_KP               0.1f //0.035f
+#define PID_KI               0.0f //0.005f //0.001f //oscillation around 0.04 or 0.05
+#define PID_KD               0.0f //0.00075f//0.06f
 
 /* ==================== PID Timing ==================== */
 /* TIM2 update fires at ~10 kHz.  We only run PID every */
@@ -122,7 +88,9 @@
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
 
+TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 UART_HandleTypeDef huart1;
@@ -133,8 +101,15 @@ UART_HandleTypeDef huart1;
 volatile float total_angle = 0;
 float previous_angle = 0;
 
-float target_position = 0.0f;   // mm
-char msg[64];
+volatile float target_position = 0.0f;   // mm
+volatile uint8_t uart_ready = 0;
+char uart_msg[100];
+
+volatile uint32_t adc_value;
+volatile float debug_angle = 0;
+volatile float debug_dist = 0;
+volatile uint8_t target_reached_flag = 0;
+
 
 //pid variables
 float pid_error = 0;
@@ -144,55 +119,15 @@ float pid_prev_error = 0;
 float pid_output = 0;
 
 uint32_t hold_start_time = 0;
-uint8_t holding = 0;
-float current_position = 0.0f;
+volatile uint8_t holding = 0;
+volatile float current_position = 0.0f;
 uint32_t last_pid_time = 0;
 
-float targets[] = {50.0f, 100.0f, 0.0f, 150.0f,175.0f};  // Example target positions in mm
-int current_target_index = 0;
-float trialBar[] = {Cs, hCs, hB, hFs, hD, hCs, 
-  hB, hFs, hD, hA, hG, hD, B, hA, hG, hD,
-  hG, hFs, hD, B, G}; // first part
+float targets[] = {50.0f, 100.0f, 0.0f, 150.0f,175.0f,-100.0f, 130.0f};  // Example target positions in mm
+volatile int current_target_index = 0;
 
-float secondBar[] = {Fs, G, A, B, Cs, hD,
-  hE, hFs}; //middle transition
+volatile uint8_t solenoid_trigger = 0;
 
-float thirdBar[] = {hCs, hB, hFs, hD, hCs, 
-  hB, hFs, hD, hA, hG, hD, hG, hFs, 
-  hD, B, G};
-
-float fourthBar[] = {Fs, G, A, B, Cs, hD,
-  hE, hFs,
-  hFs, hE, hD, B, B, hFs,
-  hE, hE, B, hE, B};
-
-float fifthBar[] = {hFs, hE, hD, Cs, B,
-  Cs, hD, hE, hFs, 
-  B, Cs, hD, hE, hFs, hA, hFs, hA,
-  hFs, hG, hFs, hG, hFs, hG, hFs};
-
-int current_target_index = 0;
-float BW1[] = {BLACK_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY,
-  WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY,
-  WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY};
-
-float BW2[] = {BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY};
-
-float BW3[] = {BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY,
-  WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY,
-  WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY};
-
-float BW4[] = {BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, 
-  BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY, WHITE_KEY};
-
-float BW5[] = {BLACK_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY,
-  WHITE_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY, WHITE_KEY, BLACK_KEY};
-
-float timing1[] = {LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS};
-float timing2[] = {MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS};
-float timing3[] = {LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS};
-float timing4[] = {MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, MID_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, SHORT_PRESS, SHORT_PRESS, SHORT_PRESS};
-float timing5[] = {LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, LONG_PRESS};
 
 
 /* USER CODE END PV */
@@ -200,16 +135,18 @@ float timing5[] = {LONG_PRESS, LONG_PRESS, LONG_PRESS, LONG_PRESS, SHORT_PRESS, 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_TIM3_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 float get_angle(void);
 void Motor_SetOutput(float output);
 void Update_Position(void);
 void press(int finger, int duration);
-float PID_Compute(float current_position);
+float PID_Compute(volatile float current_position);
 //void Run_PID(void);
 /* USER CODE END PFP */
 
@@ -226,7 +163,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  //am i still here
+//am i still here
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -248,19 +185,25 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_ADC1_Init();
   MX_TIM3_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // Ensure LED is off at start - ACTIVE LOW
-  //Start PWM channels for motor control
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
-  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+  HAL_TIM_Base_Start_IT(&htim2);
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)&adc_value, 1);
+ 
+HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // Ensure LED is off at start - ACTIVE LOW
+//Start PWM channels for motor control
+HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 
-  // Read initial angle so we start from 0
-  previous_angle = get_angle();
-  total_angle = 0.0f;
-  //HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
+// Read initial angle so we start from 0
+
+previous_angle = get_angle();
+total_angle = 0.0f;
+//HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
 
   /* USER CODE END 2 */
@@ -269,49 +212,62 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    Update_Position();
-    current_position = total_angle * MM_PER_DEGREE;
 
-    
-
-    // Run PID at 1 kHz
-    target_position = trialBar[current_target_index]; //targets[current_target_index];
-
-    float error = target_position - current_position;
-    if (!holding)
+    // --- UART debug ---
+    if (uart_ready)
     {
-        if (fabsf(error) < DEADBAND)
-        {
-            Motor_SetOutput(0);
-            pid_integral = 0;
-    
-            holding = 1;
-            hold_start_time = HAL_GetTick();
-        }
-        else
-        {
-            float output = PID_Compute(current_position);
-            Motor_SetOutput(output);
-        }
+        uart_ready = 0;
+
+        sprintf(uart_msg, "Angle: %.2f | Dist: %.2f\r\n",
+                debug_angle, debug_dist);
+
+        HAL_UART_Transmit(&huart1, (uint8_t*)uart_msg, strlen(uart_msg), 100);
     }
-    else
+
+    // --- Handle target reached event (from ISR) ---
+    if (target_reached_flag)
+    {
+        target_reached_flag = 0;
+
+        // Activate solenoid + LED
+        solenoid_trigger = 1;
+
+        HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+
+        hold_start_time = HAL_GetTick();
+    }
+
+    // --- Holding logic (timed in main loop) ---
+    if (holding)
     {
         if (HAL_GetTick() - hold_start_time > 500)
         {
             holding = 0;
+
+            // Deactivate solenoid + LED
+            solenoid_trigger = 0;
+
+            HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
+
+            // Move to next target
             current_target_index++;
-    
-            if (current_target_index >= 21)
+
+            if (current_target_index >= 7)
                 current_target_index = 0;
+
+            target_position = targets[current_target_index];
         }
-        /* USER CODE END WHILE */
-    
-        /* USER CODE BEGIN 3 */
-      }
-      /* USER CODE END 3 */
+    }
+  }
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+
+  /* USER CODE END 3 */
 }
 
-}
 /**
   * @brief System Clock Configuration
   * @retval None
@@ -382,7 +338,7 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T3_TRGO;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc1.Init.NbrOfConversion = 1;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
@@ -406,6 +362,51 @@ static void MX_ADC1_Init(void)
 }
 
 /**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 15;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 999;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
   * @brief TIM3 Initialization Function
   * @param None
   * @retval None
@@ -417,6 +418,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 0 */
 
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
 
@@ -426,14 +428,23 @@ static void MX_TIM3_Init(void)
   htim3.Instance = TIM3;
   htim3.Init.Prescaler = 159;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 199;
+  htim3.Init.Period = 99;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
   {
     Error_Handler();
   }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
   {
@@ -492,6 +503,22 @@ static void MX_USART1_UART_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -522,6 +549,11 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : PA7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
   /*Configure GPIO pins : PB14 PB15 */
   GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
@@ -539,20 +571,10 @@ static void MX_GPIO_Init(void)
 
 float get_angle(void)
 {
-    uint32_t adc_raw = 0;
-    float voltage = 0.0f;
-    float angle = 0.0f;
+    float voltage = (adc_value / 4095.0f) * 3.3f;
 
-    // Start ADC conversion
-    HAL_ADC_Start(&hadc1);
-
-    // Wait for conversion to finish (timeout 10ms)
-    if(HAL_ADC_PollForConversion(&hadc1, 10) == HAL_OK)
-    {
-        adc_raw = HAL_ADC_GetValue(&hadc1);  // 12-bit value 0-4095
-        voltage = (float)adc_raw / 4095.0f * 3.3f; // assuming Vref = 3.3V
-        angle = voltage / 3.3f * 360.0f;  // scale voltage to 0-360°
-    }
+    // your conversion logic here
+    float angle = (voltage / 3.3f) * 360.0f;
 
     return angle;
 }
@@ -584,7 +606,7 @@ void Motor_SetOutput(float output)
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
     }
 }
-float PID_Compute(float current_position)
+float PID_Compute(volatile float current_position)
 {
     float error = target_position - current_position;
 
@@ -617,70 +639,61 @@ void Update_Position(void){
 
     float delta = current_angle - previous_angle;
 
+    // unwrap angle
     if (delta > 180.0f) delta -= 360.0f;
     if (delta < -180.0f) delta += 360.0f;
 
     total_angle += delta;
     previous_angle = current_angle;
 
-    float distance_mm = total_angle * MM_PER_DEGREE;
-
-    int len = sprintf(msg, "Total Angle: %.2f deg | Distance: %.2f mm\r\n",
-                      total_angle, distance_mm);
-
-   // HAL_UART_Transmit(&huart1, (uint8_t*)msg, len, 100);
 }
 
-void press(int finger, int duration){
-    //Activate solenoid to press key
-    if(finger == WHITE_KEY){
-        HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
-        HAL_Delay(duration*100);
-        HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
-    }
-    else{
-        HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_SET);
-        HAL_Delay(duration*100);
-        HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
+
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM2)
+    {
+    
+
+        // --- Position update ---
+        Update_Position();
+        current_position = total_angle * MM_PER_DEGREE;
+
+        debug_angle = total_angle;
+        debug_dist = current_position;
+
+        uart_ready = 1;
+
+        // --- PID control ---
+        if (!holding)
+        {
+            float error = target_position - current_position;
+
+            if (fabsf(error) < DEADBAND)
+            {
+                Motor_SetOutput(0);
+                pid_integral = 0;
+
+                holding = 1;
+
+                // Signal main loop only
+                target_reached_flag = 1;
+            }
+            else
+            {
+                float output = PID_Compute(current_position);
+                Motor_SetOutput(output);
+            }
+        }
+        else
+        {
+            Motor_SetOutput(0);
+        }
     }
 }
 
-/*void Run_PID(void){
-  current_position = total_angle * MM_PER_DEGREE;
-  // Run PID at 1 kHz
- 
 
-  float error = target_position - current_position;
-  if (!holding)
-  {
-    if (fabsf(error) < DEADBAND)
-    {
-        Motor_SetOutput(0);
-        pid_integral = 0;
-
-        holding = 1;
-        hold_start_time = HAL_GetTick();
-    }
-    else
-    {
-        float output = PID_Compute(current_position);
-        Motor_SetOutput(output);
-    }
-  }
-  else
-  {
-    if (HAL_GetTick() - hold_start_time > 500)
-    {
-        holding = 0;
-
-    }
-  }
-
-} */
-
-/*void play_note(int note, int duration){
-
-}*/
 
 /* USER CODE END 4 */
 
