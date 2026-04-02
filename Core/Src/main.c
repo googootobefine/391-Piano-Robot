@@ -100,6 +100,7 @@ UART_HandleTypeDef huart1;
 //angle tracking variables
 volatile float total_angle = 0;
 float previous_angle = 0;
+float initial_angle = 0.0f;
 
 volatile float target_position = 0.0f;   // mm
 volatile uint8_t uart_ready = 0;
@@ -202,6 +203,7 @@ HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 // Read initial angle so we start from 0
 
 previous_angle = get_angle();
+initial_angle = get_angle();
 total_angle = 0.0f;
 //HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
