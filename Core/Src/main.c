@@ -35,7 +35,7 @@
 /* USER CODE BEGIN PD */
 
 //=========MOTO DEFINITION=========//
-#define MM_PER_DEGREE 0.111111f
+#define MM_PER_DEGREE   0.111111f
 
 #define MOTOR_PIN GPIO_PIN_12
 #define MOTOR_PORT GPIOB
@@ -48,24 +48,76 @@
 #define SOLENOID_PIN2 GPIO_PIN_15
 #define SOLENOID_PORT2 GPIOB
 
+// =====================PIANO KEY DEFINITIONS================//
+// BPM 77, 77/60 = 1.283 seconds per beat round to 1.28 per quarter note
 #define WHITE_KEY 0
 #define BLACK_KEY 1
-#define SHORT_PRESS 1
-#define LONG_PRESS 5
+#define HALF 2560
+#define QUARTER 1280
+#define EIGTH 640
+#define SIXTEENTH 320
+#define DOTTED_QUARTER 1920
+#define DOTTED_EIGTH 960
+
+// UP TO 550RPM, 9.167 rotation per second  40 MM PER ROTATION 9.1678 = 366.67 mm per second
+// 22mm per white key -> 16.67 keys per second or 60ms second per key travelled
+
+#define MS_TRAVEL_PER_KEY 60
+//#define DIS_SOL1_SOL2 60.0f   //mm, 
+
+//note definitions 
+#define B1   18.0f
+#define Dsh1  18.0f   // D#
+#define C1   30.0f
+#define D1    42.0f
+#define Fsh1  42.0f   // F#
+#define E1    64.0f
+#define Gsh1   64.0f   // G#
+#define F1    86.0f
+#define Ash1   86.0f   // A#
+#define G1    108.0f
+#define A1    130.0f
+#define Csh2   130.0f   // C#
+#define B2    152.0f
+#define Dsh2   152.0f   // D#
+#define C2    174.0f
+#define D2   196.0f
+#define Fsh2  196.0f
+#define E2   218.0f
+#define Gsh2  218.0f
+#define F2   240.0f
+#define Ash2  240.0f
+#define G2   262.0f
+#define A2   284.0f
+#define Csh3   284.0f
+#define B3    306.0f
+#define Dsh3   306.0f
+#define C3    328.0f
+#define D3   350.0f
+#define Fsh3  350.0f
+#define E3  372.0f
+#define Gsh3 372.0f
 
 
 //LED for debugging
 #define LED_PIN GPIO_PIN_13
 #define LED_PORT GPIOC
 
+#define ANGLE_BIAS 0.0f   // degrees, tune this
+
 /* ==================== PID Gains ==================== */
 /* Start with these, tune on real hardware:             */
 /*   Kp: increase until fast response without overshoot */
 /*   Ki: increase to eliminate steady‑state error       */
 /*   Kd: increase to dampen oscillation                 */
-#define PID_KP               0.1f //0.035f
+
+#define PID_KP               1.0f //0.035f 0.6f
 #define PID_KI               0.0f //0.005f //0.001f //oscillation around 0.04 or 0.05
-#define PID_KD               0.0f //0.00075f//0.06f
+#define PID_KD               0.005f //0.00075f//0.06f
+
+#define LEFT_DRIFT_COMP      5.00f
+
+
 
 /* ==================== PID Timing ==================== */
 /* TIM2 update fires at ~10 kHz.  We only run PID every */
@@ -100,7 +152,6 @@ UART_HandleTypeDef huart1;
 //angle tracking variables
 volatile float total_angle = 0;
 float previous_angle = 0;
-float initial_angle = 0.0f;
 
 volatile float target_position = 0.0f;   // mm
 volatile uint8_t uart_ready = 0;
@@ -110,6 +161,9 @@ volatile uint32_t adc_value;
 volatile float debug_angle = 0;
 volatile float debug_dist = 0;
 volatile uint8_t target_reached_flag = 0;
+
+volatile float filtered_delta_to_print = 0;
+
 
 
 //pid variables
@@ -124,7 +178,7 @@ volatile uint8_t holding = 0;
 volatile float current_position = 0.0f;
 uint32_t last_pid_time = 0;
 
-float targets[] = {50.0f, 100.0f, 0.0f, 150.0f,175.0f,-100.0f, 130.0f};  // Example target positions in mm
+float targets[] = {-100.0f, 100.0f};  // Example target positions in mm
 volatile int current_target_index = 0;
 
 volatile uint8_t solenoid_trigger = 0;
@@ -146,8 +200,10 @@ static void MX_TIM2_Init(void);
 float get_angle(void);
 void Motor_SetOutput(float output);
 void Update_Position(void);
-void press(int finger, int duration);
+
 float PID_Compute(volatile float current_position);
+void run();
+void press(int finger, int duration, float note, int next_white_key_amt);
 //void Run_PID(void);
 /* USER CODE END PFP */
 
@@ -203,8 +259,10 @@ HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 // Read initial angle so we start from 0
 
 previous_angle = get_angle();
-initial_angle = get_angle();
 total_angle = 0.0f;
+current_target_index = 0;
+target_position = targets[0];
+holding = 0;
 //HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
 
@@ -214,54 +272,8 @@ total_angle = 0.0f;
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-
-    // --- UART debug ---
-    if (uart_ready)
-    {
-        uart_ready = 0;
-
-        sprintf(uart_msg, "Angle: %.2f | Dist: %.2f\r\n",
-                debug_angle, debug_dist);
-
-        HAL_UART_Transmit(&huart1, (uint8_t*)uart_msg, strlen(uart_msg), 100);
-    }
-
-    // --- Handle target reached event (from ISR) ---
-    if (target_reached_flag)
-    {
-        target_reached_flag = 0;
-
-        // Activate solenoid + LED
-        solenoid_trigger = 1;
-
-        HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
-
-        hold_start_time = HAL_GetTick();
-    }
-
-    // --- Holding logic (timed in main loop) ---
-    if (holding)
-    {
-        if (HAL_GetTick() - hold_start_time > 500)
-        {
-            holding = 0;
-
-            // Deactivate solenoid + LED
-            solenoid_trigger = 0;
-
-            HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
-            HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
-
-            // Move to next target
-            current_target_index++;
-
-            if (current_target_index >= 7)
-                current_target_index = 0;
-
-            target_position = targets[current_target_index];
-        }
-    }
+    run();
+    
   }
     /* USER CODE END WHILE */
 
@@ -570,16 +582,16 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
-
+//------------------------- 1: GET ANGLE----------------------//
 float get_angle(void)
 {
     float voltage = (adc_value / 4095.0f) * 3.3f;
-
-    // your conversion logic here
     float angle = (voltage / 3.3f) * 360.0f;
 
-    return angle;
+    return angle + ANGLE_BIAS;
 }
+
+// ------------------------2: MOTOR OUTPUT---------------------//
 void Motor_SetOutput(float output)
 {
     // Clamp to safe range (-1 to 1)
@@ -597,7 +609,8 @@ void Motor_SetOutput(float output)
     }
     else if (output < 0)
     {
-        // Reverse
+        // Backward
+        
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 0);   // PB0 (IN1)
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pwm); // PB1 (IN2)
     }
@@ -608,9 +621,16 @@ void Motor_SetOutput(float output)
         __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
     }
 }
+
+//----------------------3. PID COMPUTE--------------------//
+
 float PID_Compute(volatile float current_position)
 {
     float error = target_position - current_position;
+
+if (error < 0) {  // moving left
+    error += LEFT_DRIFT_COMP;
+}
 
     // Integral
     pid_integral += error * PID_DT;
@@ -636,21 +656,31 @@ float derivative = filtered_derivative;
 
     return output;
 }
-void Update_Position(void){
+
+//------------------------4. UPDATE POSITION-----------------------------//
+
+void Update_Position(void)
+{
     float current_angle = get_angle();
 
-    float position = current_angle - initial_angle;
+    float delta = current_angle - previous_angle;
 
-    //unwrap so it handles passing through 0/360 boundary
-    if (position > 180.0f)  position -= 360.0f;
-    if (position < -180.0f) position += 360.0f;
+    // unwrap
+    if (delta > 180.0f) delta -= 360.0f;
+    if (delta < -180.0f) delta += 360.0f;
 
-    total_angle = position;  // assign, don't accumulate
+    // FILTER THE DELTA (not the angle)
+    static float filtered_delta = 0;
+    filtered_delta = 0.05f * delta + 0.95f * filtered_delta;
 
+    total_angle += filtered_delta;
+    filtered_delta_to_print = filtered_delta;
+
+    previous_angle = current_angle;
 }
 
 
-
+//-------------------------5. TIMER 2 INTERRUPT (RUNS PID)--------------------//
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM2)
@@ -671,16 +701,13 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         {
             float error = target_position - current_position;
 
-            if (fabsf(error) < DEADBAND)
-            {
-                Motor_SetOutput(0);
-                pid_integral = 0;
-
-                holding = 1;
-
-                // Signal main loop only
-                target_reached_flag = 1;
-            }
+          if (fabsf(error) < DEADBAND)
+          {
+            Motor_SetOutput(0);
+            pid_integral = 0;
+            holding = 1;
+            target_reached_flag = 1;
+          }
             else
             {
                 float output = PID_Compute(current_position);
@@ -693,7 +720,96 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         }
     }
 }
+//------------------------6. MAIN FUNCTION, PLAY SONG----------------------------//
+void run(void){
+  // --- UART debug ---
+    if (uart_ready)
+    {
+        uart_ready = 0;
 
+        sprintf(uart_msg, "Angle: %.2f | Dist: %.2f | Delta %.2f \r\n",
+                debug_angle, debug_dist, filtered_delta_to_print);
+
+        HAL_UART_Transmit(&huart1, (uint8_t*)uart_msg, strlen(uart_msg), 100);
+    }
+
+    // --- Handle target reached event (from ISR) ---
+    if (target_reached_flag)
+    {
+        target_reached_flag = 0;
+
+        // Activate solenoid + LED
+        solenoid_trigger = 1;
+
+        HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+
+        hold_start_time = HAL_GetTick();
+    }
+
+    // --- Holding logic (timed in main loop) ---
+    if (holding)
+    {
+        if (HAL_GetTick() - hold_start_time > 600)
+        {
+            holding = 0;
+
+            // Deactivate solenoid + LED
+            solenoid_trigger = 0;
+
+            HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
+
+            // Move to next target
+            current_target_index++;
+
+            if (current_target_index >= 2)
+                current_target_index = 0;
+
+            target_position = targets[current_target_index];
+        }
+    }
+}
+
+//==========================7. Play note========================//
+void press(int finger, int duration, float note, int next_white_key_amt)
+{
+/* finger: white or black keys
+   duration: time to hold the key (ms)
+   note: target position (mm)
+   next_white_key_amt: number of white keys to the next note to release early for travel
+*/
+
+  target_position = note;
+      // --- Handle target reached event (from ISR) ---
+    if (target_reached_flag)
+    {
+        target_reached_flag = 0;
+
+        // Activate solenoid + LED
+        solenoid_trigger = 1;
+
+        HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
+        
+
+        hold_start_time = HAL_GetTick();
+    }
+
+    // --- Holding logic (timed in main loop) ---
+    if (holding)
+    {
+        if (HAL_GetTick() - hold_start_time > (duration - next_white_key_amt * MS_TRAVEL_PER_KEY))
+        {
+            holding = 0;
+
+            // Deactivate solenoid + LED
+            solenoid_trigger = 0;
+
+            HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+
+        }
+    }
+}
 
 
 /* USER CODE END 4 */
