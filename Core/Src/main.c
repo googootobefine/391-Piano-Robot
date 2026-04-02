@@ -43,7 +43,7 @@
 #define MOTOR_PORT2 GPIOB
 
 //Solenoid GPIO for Actuator
-#define SOLENOID_PIN GPIO_PIN_14
+#define SOLENOID_PIN GPIO_PIN_14  //WHITE
 #define SOLENOID_PORT GPIOB
 #define SOLENOID_PIN2 GPIO_PIN_15
 #define SOLENOID_PORT2 GPIOB
@@ -160,7 +160,7 @@ char uart_msg[100];
 volatile uint32_t adc_value;
 volatile float debug_angle = 0;
 volatile float debug_dist = 0;
-volatile uint8_t target_reached_flag = 0;
+
 
 volatile float filtered_delta_to_print = 0;
 
@@ -174,14 +174,44 @@ float pid_prev_error = 0;
 float pid_output = 0;
 
 uint32_t hold_start_time = 0;
-volatile uint8_t holding = 0;
+//volatile uint8_t holding = 0;
 volatile float current_position = 0.0f;
 uint32_t last_pid_time = 0;
+volatile uint8_t solenoid_trigger = 0;
+volatile uint8_t target_reached_flag = 0;
 
+//========MODES========//
 float targets[] = {-100.0f, 100.0f};  // Example target positions in mm
 volatile int current_target_index = 0;
 
-volatile uint8_t solenoid_trigger = 0;
+
+
+
+typedef struct {
+    int finger;
+    int duration;
+    float note;
+    int next_white_keys;
+} Note;
+
+Note song[] = {
+    {WHITE_KEY, QUARTER, C1, 1},
+    {WHITE_KEY, QUARTER, D1, 1},
+    {WHITE_KEY, QUARTER, E1, 0},
+};
+
+int song_index = 0;
+int song_length = 3;
+
+
+typedef enum {
+    STATE_IDLE,
+    STATE_MOVING,
+    STATE_HOLDING
+} PlayState;
+
+volatile PlayState play_state = STATE_IDLE;
+uint32_t hold_duration = 0;
 
 
 
@@ -202,8 +232,9 @@ void Motor_SetOutput(float output);
 void Update_Position(void);
 
 float PID_Compute(volatile float current_position);
-void run();
-void press(int finger, int duration, float note, int next_white_key_amt);
+void debugging();
+void travel_play(int finger, int duration, float note, int next_white_key_amt);
+void song_update(void);
 //void Run_PID(void);
 /* USER CODE END PFP */
 
@@ -262,7 +293,7 @@ previous_angle = get_angle();
 total_angle = 0.0f;
 current_target_index = 0;
 target_position = targets[0];
-holding = 0;
+//holding = 0;
 //HAL_UART_Transmit(&huart1, (uint8_t*)"Start\r\n", 7, 100);
 
 
@@ -272,8 +303,13 @@ holding = 0;
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    run();
+
+    //DEBUG MODE
+    debugging();  
     
+    //SONG MODE
+    //playback_update();
+    //song_update();
   }
     /* USER CODE END WHILE */
 
@@ -697,31 +733,36 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         uart_ready = 1;
 
         // --- PID control ---
-        if (!holding)
-        {
-            float error = target_position - current_position;
+if (play_state != STATE_HOLDING)
+{
+    float error = target_position - current_position;
 
-          if (fabsf(error) < DEADBAND)
-          {
-            Motor_SetOutput(0);
-            pid_integral = 0;
-            holding = 1;
-            target_reached_flag = 1;
-          }
-            else
-            {
-                float output = PID_Compute(current_position);
-                Motor_SetOutput(output);
-            }
-        }
-        else
-        {
-            Motor_SetOutput(0);
-        }
+    static uint8_t was_in_deadband = 0;
+    uint8_t in_deadband = (fabsf(error) < DEADBAND);
+
+    if (in_deadband && !was_in_deadband)
+    {
+      Motor_SetOutput(0);
+      pid_integral = 0;
+      target_reached_flag = 1;
+    }
+
+    was_in_deadband = in_deadband;
+
+    if (!in_deadband)
+  {
+    float output = PID_Compute(current_position);
+    Motor_SetOutput(output);
     }
 }
-//------------------------6. MAIN FUNCTION, PLAY SONG----------------------------//
-void run(void){
+else
+{
+    Motor_SetOutput(0);
+}
+    }
+}
+//------------------------6. DEBUGGING MODE----------------------------//
+void debugging(void){
   // --- UART debug ---
     if (uart_ready)
     {
@@ -745,14 +786,15 @@ void run(void){
         HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
 
         hold_start_time = HAL_GetTick();
+        play_state = STATE_HOLDING;
     }
 
     // --- Holding logic (timed in main loop) ---
-    if (holding)
+    if (play_state == STATE_HOLDING)
     {
         if (HAL_GetTick() - hold_start_time > 600)
         {
-            holding = 0;
+            play_state = STATE_IDLE;
 
             // Deactivate solenoid + LED
             solenoid_trigger = 0;
@@ -772,45 +814,70 @@ void run(void){
 }
 
 //==========================7. Play note========================//
-void press(int finger, int duration, float note, int next_white_key_amt)
+
+void travel_play(int finger, int duration, float note, int next_white_key_amt)
 {
-/* finger: white or black keys
-   duration: time to hold the key (ms)
-   note: target position (mm)
-   next_white_key_amt: number of white keys to the next note to release early for travel
-*/
-
-  target_position = note;
-      // --- Handle target reached event (from ISR) ---
-    if (target_reached_flag)
+    if (play_state != STATE_IDLE)
     {
-        target_reached_flag = 0;
+        return;}
 
-        // Activate solenoid + LED
-        solenoid_trigger = 1;
+    int32_t adjusted = duration - next_white_key_amt * MS_TRAVEL_PER_KEY;
+    if (adjusted < 0) adjusted = 0;
 
-        HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
-        
+    hold_duration = adjusted;
+    target_position = note;
 
-        hold_start_time = HAL_GetTick();
-    }
+    play_state = STATE_MOVING;
+}
 
-    // --- Holding logic (timed in main loop) ---
-    if (holding)
+
+//==========================8. SONG UPDATE (called in main loop)========================//
+void song_update(void)
+{
+    if (play_state == STATE_IDLE && song_index < song_length)
     {
-        if (HAL_GetTick() - hold_start_time > (duration - next_white_key_amt * MS_TRAVEL_PER_KEY))
-        {
-            holding = 0;
+        travel_play(
+            song[song_index].finger,
+            song[song_index].duration,
+            song[song_index].note,
+            song[song_index].next_white_keys
+        );
 
-            // Deactivate solenoid + LED
-            solenoid_trigger = 0;
-
-            HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
-
-        }
+        song_index++;
     }
 }
 
+void playback_update(void)
+{
+    uint32_t now = HAL_GetTick();
+
+    switch (play_state)
+    {
+        case STATE_IDLE:
+            break;
+
+        case STATE_MOVING:
+            if (target_reached_flag)
+            {
+                target_reached_flag = 0;
+
+                HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
+
+                hold_start_time = now;
+                play_state = STATE_HOLDING;
+            }
+            break;
+
+        case STATE_HOLDING:
+            if (now - hold_start_time > hold_duration)
+            {
+                HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+
+                play_state = STATE_IDLE;
+            }
+            break;
+    }
+}
 
 /* USER CODE END 4 */
 
