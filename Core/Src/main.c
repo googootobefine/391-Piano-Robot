@@ -637,14 +637,13 @@ float derivative = filtered_derivative;
 void Update_Position(void){
     float current_angle = get_angle();
 
-    float delta = current_angle - previous_angle;
+    float position = current_angle - initial_angle;
 
-    // unwrap angle
-    if (delta > 180.0f) delta -= 360.0f;
-    if (delta < -180.0f) delta += 360.0f;
+    //unwrap so it handles passing through 0/360 boundary
+    if (position > 180.0f)  position -= 360.0f;
+    if (position < -180.0f) position += 360.0f;
 
-    total_angle += delta;
-    previous_angle = current_angle;
+    total_angle = position;  // assign, don't accumulate
 
 }
 
