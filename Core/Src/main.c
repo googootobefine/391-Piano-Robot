@@ -42,7 +42,7 @@
 #define MOTOR_PIN2 GPIO_PIN_13
 #define MOTOR_PORT2 GPIOB
 
-//Solenoid GPIO for Actuator
+//==================Solenoid GPIO for Actuator//
 #define SOLENOID_PIN GPIO_PIN_14  //WHITE
 #define SOLENOID_PORT GPIOB
 #define SOLENOID_PIN2 GPIO_PIN_15
@@ -58,12 +58,16 @@
 #define SIXTEENTH 320
 #define DOTTED_QUARTER 1920
 #define DOTTED_EIGTH 960
+#define REST 1
+#define NO_REST 0
 
 // UP TO 550RPM, 9.167 rotation per second  40 MM PER ROTATION 9.1678 = 366.67 mm per second
 // 22mm per white key -> 16.67 keys per second or 60ms second per key travelled
 
 #define MS_TRAVEL_PER_KEY 60
 //#define DIS_SOL1_SOL2 60.0f   //mm, 
+
+#define SETTLE_TIME_MS  40   // start with 20–80 ms, tune experimentally
 
 //note definitions 
 #define B1   18.0f
@@ -97,13 +101,13 @@
 #define Fsh3  350.0f
 #define E3  372.0f
 #define Gsh3 372.0f
-
+//=================================================================================
 
 //LED for debugging
 #define LED_PIN GPIO_PIN_13
 #define LED_PORT GPIOC
 
-#define ANGLE_BIAS 0.0f   // degrees, tune this
+
 
 /* ==================== PID Gains ==================== */
 /* Start with these, tune on real hardware:             */
@@ -113,10 +117,11 @@
 
 #define PID_KP               1.0f //0.035f 0.6f
 #define PID_KI               0.0f //0.005f //0.001f //oscillation around 0.04 or 0.05
-#define PID_KD               0.005f //0.00075f//0.06f
+#define PID_KD               0.0f //0.125f//0.00075f//0.06f
 
-#define LEFT_DRIFT_COMP      5.00f
+#define RIGHT_DRIFT_COMP      0.00f
 
+#define ANGLE_BIAS 0.0f   // degrees, tune this
 
 
 /* ==================== PID Timing ==================== */
@@ -130,7 +135,7 @@
 
 /* Dead‑band: if |error| <= this, stop the motor        */
 #define DEADBAND             5.0f
-
+//==============================================================
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -152,6 +157,7 @@ UART_HandleTypeDef huart1;
 //angle tracking variables
 volatile float total_angle = 0;
 float previous_angle = 0;
+float offset_angle = 0;
 
 volatile float target_position = 0.0f;   // mm
 volatile uint8_t uart_ready = 0;
@@ -181,7 +187,8 @@ volatile uint8_t solenoid_trigger = 0;
 volatile uint8_t target_reached_flag = 0;
 
 //========MODES========//
-float targets[] = {-100.0f, 100.0f};  // Example target positions in mm
+float targets[] = {50.0f, 100.0f};  // Example target positions in mm
+#define NUMBER_OF_TARGETS (sizeof(targets) / sizeof(targets[0]))
 volatile int current_target_index = 0;
 
 
@@ -192,26 +199,61 @@ typedef struct {
     int duration;
     float note;
     int next_white_keys;
+    int rest;
 } Note;
 
 Note song[] = {
-    {WHITE_KEY, QUARTER, C1, 1},
-    {WHITE_KEY, QUARTER, D1, 1},
-    {WHITE_KEY, QUARTER, E1, 0},
+    {BLACK_KEY, EIGTH, Csh3, 1, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B3, 5, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, 0, NO_REST},
+    {WHITE_KEY, EIGTH, D2, 4, NO_REST},
+
+    {WHITE_KEY, QUARTER, Csh3, 1, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B3, 5, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, 0, NO_REST},
+    {WHITE_KEY, DOTTED_EIGTH, D2, 4, NO_REST},
+
+    {WHITE_KEY, EIGTH, A2, 1, NO_REST},
+    {WHITE_KEY, SIXTEENTH, G2, 3, NO_REST},
+    {WHITE_KEY, EIGTH, D2, 2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, 6, NO_REST},
+
+    {WHITE_KEY, DOTTED_EIGTH, A2, 1, NO_REST},
+    {WHITE_KEY, EIGTH, G2, 3, NO_REST},
+    {WHITE_KEY, QUARTER, D2, 3, NO_REST},
+
+    {WHITE_KEY, EIGTH, G2, 3, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Fsh2, 0, NO_REST},
+    {WHITE_KEY, EIGTH, D2, 2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, 2, NO_REST},
+    {WHITE_KEY, HALF + SIXTEENTH, G1, 3, NO_REST},
+    
+    {BLACK_KEY, EIGTH, Fsh1, 3, NO_REST},
+    {WHITE_KEY, EIGTH, G1, 1, NO_REST},
+    {WHITE_KEY, EIGTH, A1, 1, NO_REST},
+    {WHITE_KEY, EIGTH, B2, 1, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, 3, NO_REST},
+    {WHITE_KEY, EIGTH, D2, 1, NO_REST},
+    {WHITE_KEY, EIGTH, E2, 1, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, 4, NO_REST},  
+    
 };
 
 int song_index = 0;
-int song_length = 3;
+int song_length = 28;
 
 
 typedef enum {
     STATE_IDLE,
     STATE_MOVING,
-    STATE_HOLDING
+    STATE_SETTLING,
+    STATE_HOLDING,
+    STATE_RESTING
 } PlayState;
 
 volatile PlayState play_state = STATE_IDLE;
 uint32_t hold_duration = 0;
+int w_or_b = 0;
 
 
 
@@ -233,8 +275,9 @@ void Update_Position(void);
 
 float PID_Compute(volatile float current_position);
 void debugging();
-void travel_play(int finger, int duration, float note, int next_white_key_amt);
+void travel_play(int finger, int duration, float note, int next_white_key_amt, int rest);
 void song_update(void);
+void playback_update(void);
 //void Run_PID(void);
 /* USER CODE END PFP */
 
@@ -290,6 +333,8 @@ HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 // Read initial angle so we start from 0
 
 previous_angle = get_angle();
+HAL_Delay(500);  // small delay to stabilize reading
+offset_angle = get_angle();
 total_angle = 0.0f;
 current_target_index = 0;
 target_position = targets[0];
@@ -664,8 +709,8 @@ float PID_Compute(volatile float current_position)
 {
     float error = target_position - current_position;
 
-if (error < 0) {  // moving left
-    error += LEFT_DRIFT_COMP;
+if (error > 0) {  // moving right
+    error += RIGHT_DRIFT_COMP;
 }
 
     // Integral
@@ -707,7 +752,8 @@ void Update_Position(void)
 
     // FILTER THE DELTA (not the angle)
     static float filtered_delta = 0;
-    filtered_delta = 0.05f * delta + 0.95f * filtered_delta;
+    //filtered_delta = 0.05f * delta + 0.95f * filtered_delta;
+    filtered_delta = delta;  // no filter for now, but can re-enable if noisy
 
     total_angle += filtered_delta;
     filtered_delta_to_print = filtered_delta;
@@ -733,7 +779,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         uart_ready = 1;
 
         // --- PID control ---
-if (play_state != STATE_HOLDING)
+if (play_state == STATE_MOVING || play_state == STATE_SETTLING)
 {
     float error = target_position - current_position;
 
@@ -752,7 +798,7 @@ if (play_state != STATE_HOLDING)
     if (!in_deadband)
   {
     float output = PID_Compute(current_position);
-    Motor_SetOutput(output);
+    Motor_SetOutput(output);  // scale down output for safety, tune as needed
     }
 }
 else
@@ -768,8 +814,8 @@ void debugging(void){
     {
         uart_ready = 0;
 
-        sprintf(uart_msg, "Angle: %.2f | Dist: %.2f | Delta %.2f \r\n",
-                debug_angle, debug_dist, filtered_delta_to_print);
+        sprintf(uart_msg, "Angle: %.2f | Dist: %.2f | Delta %.2f | OffsetAngle %.2f \r\n",
+                debug_angle, debug_dist, filtered_delta_to_print, offset_angle);
 
         HAL_UART_Transmit(&huart1, (uint8_t*)uart_msg, strlen(uart_msg), 100);
     }
@@ -805,7 +851,7 @@ void debugging(void){
             // Move to next target
             current_target_index++;
 
-            if (current_target_index >= 2)
+            if (current_target_index >= NUMBER_OF_TARGETS)
                 current_target_index = 0;
 
             target_position = targets[current_target_index];
@@ -815,18 +861,35 @@ void debugging(void){
 
 //==========================7. Play note========================//
 
-void travel_play(int finger, int duration, float note, int next_white_key_amt)
+void travel_play( int finger, int duration, float note, int next_white_key_amt, int rest)
 {
+  /* finger: white or black key
+      duration: quarter, half, etc.
+
+      note: the target position
+
+      next_white_key_amt: number of white keys to the right.
+     decrease hold time to account for travel time to next note
+      */
+
     if (play_state != STATE_IDLE)
     {
         return;}
 
-    int32_t adjusted = duration - next_white_key_amt * MS_TRAVEL_PER_KEY;
+    int32_t adjusted = duration - next_white_key_amt * MS_TRAVEL_PER_KEY - SETTLE_TIME_MS;  // subtract estimated travel time and settling time from hold duration
     if (adjusted < 0) adjusted = 0;
 
     hold_duration = adjusted;
+    w_or_b = finger;
+    
+    if (rest == REST) {
+        hold_start_time = HAL_GetTick();
+        target_position = note;
+        play_state = STATE_RESTING;
+        return;
+    }
     target_position = note;
-
+    
     play_state = STATE_MOVING;
 }
 
@@ -840,7 +903,8 @@ void song_update(void)
             song[song_index].finger,
             song[song_index].duration,
             song[song_index].note,
-            song[song_index].next_white_keys
+            song[song_index].next_white_keys,
+            song[song_index].rest
         );
 
         song_index++;
@@ -861,8 +925,31 @@ void playback_update(void)
             {
                 target_reached_flag = 0;
 
-                HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
-
+                hold_start_time = now;
+                play_state = STATE_SETTLING;
+            }
+            break;
+        
+        case STATE_RESTING:
+            if (now - hold_start_time >= hold_duration)
+            {
+                play_state = STATE_MOVING;
+                target_reached_flag = 0;
+            }
+            break;
+        case STATE_SETTLING:
+            if (now - hold_start_time >= SETTLE_TIME_MS)
+            {
+                if (w_or_b == WHITE_KEY)
+                {
+                    HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
+                    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);  // Turn on LED for white key
+                }
+                else
+                {
+                    HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_SET);  
+                    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);  // Turn off LED for black key
+                }
                 hold_start_time = now;
                 play_state = STATE_HOLDING;
             }
@@ -872,6 +959,8 @@ void playback_update(void)
             if (now - hold_start_time > hold_duration)
             {
                 HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+                HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
+                HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // Turn off LED after holding
 
                 play_state = STATE_IDLE;
             }
