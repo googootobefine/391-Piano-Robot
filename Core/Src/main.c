@@ -43,6 +43,10 @@
 #define SOLENOID_PIN2 GPIO_PIN_15
 #define SOLENOID_PORT2 GPIOB
 
+//===============HALL SENSOR GPIO==========//
+#define HALLSENSOR_PIN GPIO_PIN_0
+#define HALLSENSOR_PORT GPIOA
+
 // =====================PIANO KEY DEFINITIONS================//
 // BPM 77, 77/60 = 1.283 seconds per beat round to 1.28 per quarter note
 #define WHITE_KEY 0
@@ -170,6 +174,9 @@ float pid_integral = 0;
 float pid_derivative = 0;
 float pid_prev_error = 0;
 float pid_output = 0;
+
+//home
+int am_i_home = 0;
 
 uint32_t hold_start_time = 0;
 //volatile uint8_t holding = 0;
@@ -348,6 +355,7 @@ void debugging();
 void travel_play(int finger, int duration, float note, int next_travel_ms, int rest);
 void song_update(void);
 void playback_update(void);
+void go_home(void); //void go_home(float first_target);
 //void Run_PID(void);
 /* USER CODE END PFP */
 
@@ -406,6 +414,7 @@ previous_angle = get_angle();
 HAL_Delay(500);  // small delay to stabilize reading
 total_angle = 0.0f;
 current_target_index = 0;
+target_position = -420.0f; //initially goes all the way left
 //target_position = targets[0];
 
 //holding = 0;
@@ -418,13 +427,23 @@ current_target_index = 0;
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-
-    //DEBUG MODE
-    //debugging();
-
-    //SONG MODE
+   //HALL SENSOR
+   if (am_i_home == 0){
+		  go_home();
+		  //resets prev and offeset and total angles once detected
+	  }
+	  else {
+		  //SONG MODE
     playback_update();
     song_update();
+	  }
+ 
+    //DEBUG MODE
+    //debugging();
+    /*
+    //SONG MODE
+    playback_update();
+    song_update(); */
   }
     /* USER CODE END WHILE */
 
@@ -1057,6 +1076,29 @@ void playback_update(void)
                 play_state = STATE_IDLE;
             }
             break;
+    }
+}
+//============HOME SENSOR===================//
+void go_home(void) {
+    static uint32_t trigger_time = 0;
+
+    if (HAL_GPIO_ReadPin(HALLSENSOR_PORT, HALLSENSOR_PIN) == GPIO_PIN_RESET) {
+        if (trigger_time == 0) {
+            trigger_time = HAL_GetTick();
+        }
+        // Only accept as home if held for 50ms continuously
+        if (HAL_GetTick() - trigger_time > 50) {
+            am_i_home = 1;
+            play_state = STATE_IDLE;
+            previous_angle = get_angle();
+            HAL_Delay(500);
+            offset_angle = get_angle();
+            total_angle = 0.0f;
+            //target_position = first_target;
+        }
+    } else { 
+        trigger_time = 0;  // reset if signal drops
+        play_state = STATE_MOVING;
     }
 }
 
