@@ -35,7 +35,7 @@
 /* USER CODE BEGIN PD */
 
 //=========MOTO DEFINITION=========//
-#define MM_PER_DEGREE   0.11111f
+#define MM_PER_DEGREE   0.111111f
 
 //==================Solenoid GPIO for Actuator//
 #define SOLENOID_PIN GPIO_PIN_14  //WHITE
@@ -45,16 +45,20 @@
 
 // =====================PIANO KEY DEFINITIONS================//
 // BPM 77, 77/60 = 1.283 seconds per beat round to 1.28 per quarter note
+
+#define NOTE_MODIFIER 2.0f  // Adjust this to make the note durations match the song better (accounts for mechanical delays and sustain)
 #define WHITE_KEY 0
 #define BLACK_KEY 1
-#define HALF 2560
-#define QUARTER 1280
-#define EIGTH 640
-#define SIXTEENTH 320
-#define DOTTED_QUARTER 1920
-#define DOTTED_EIGTH 960
+#define HALF 2560 * NOTE_MODIFIER
+#define QUARTER 1280 * NOTE_MODIFIER
+#define EIGTH 640 * NOTE_MODIFIER
+#define SIXTEENTH 320 * NOTE_MODIFIER
+#define DOTTED_QUARTER 1920* NOTE_MODIFIER
+#define DOTTED_EIGTH 960* NOTE_MODIFIER
 #define REST 1
 #define NO_REST 0
+
+
 
 // UP TO 550RPM, 9.167 rotation per second  40 MM PER ROTATION 9.1678 = 366.67 mm per second
 // 22mm per white key -> 16.67 keys per second or 60ms second per key travelled
@@ -63,7 +67,7 @@
 #define WHITE_KEY_SPACING_MM 25.0f
 //#define DIS_SOL1_SOL2 60.0f   //mm,
 
-#define SETTLE_TIME_MS  40   // start with 20–80 ms, tune experimentally
+#define SETTLE_TIME_MS  50   // start with 20–80 ms, tune experimentally
 
 //note definitions 
 // White keys: B C D E F G A, 25mm apart, B1 = 0.0f
@@ -125,7 +129,7 @@
 #define ANGLE_BIAS 0.0f   // degrees, tune this
 
 /* Fixed backlash offset added to every move (mm) */
-#define BACKLASH_COMP_MM      20.0f
+#define BACKLASH_COMP_MM      0.0f
 
 //DRIFT NOTES
 
@@ -157,6 +161,14 @@
 
 /* Dead‑band: if |error| <= this, stop the motor        */
 #define DEADBAND             5.0f
+
+/* Kickstart: brief pulse to overcome belt static friction */
+#define KICKSTART_PWM        0.6f
+#define MIN_PWM              0.4f
+#define KICKSTART_TICKS      50     // 50ms at 1kHz
+
+/* Max time a solenoid can stay on (ms) — safety cap */
+#define MAX_SOLENOID_ON_MS   500
 //==============================================================
 /* USER CODE END PD */
 
@@ -193,12 +205,13 @@ volatile float filtered_delta_to_print = 0;
 
 
 //pid variables
+volatile uint16_t kickstart_counter = 0;
 float pid_integral = 0;
 float pid_prev_position = 0;
 float pid_filtered_derivative = 0;
 
 //home
-int am_i_home = 1;  // set to 0 for song mode (homing), 1 for debug mode (skip homing)
+volatile int am_i_home = 0;  // set to 0 for song mode (homing), 1 for debug mode (skip homing)
 
 uint32_t hold_start_time = 0;
 //volatile uint8_t holding = 0;
@@ -225,17 +238,17 @@ typedef struct {
 Note song[] = {
 
     //======= INTRO 1 phrse=====//
-    {BLACK_KEY, EIGTH, Csh3+33, NO_REST},
+    {BLACK_KEY, EIGTH, Csh3, NO_REST},
     {WHITE_KEY, SIXTEENTH, B3, NO_REST},
-    {BLACK_KEY, EIGTH, Fsh2-16, NO_REST},
-    {WHITE_KEY, EIGTH, D2-16, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
 
-    {BLACK_KEY, QUARTER, Csh3+44, NO_REST},
+    {BLACK_KEY, QUARTER, Csh3, NO_REST},
     {WHITE_KEY, SIXTEENTH, B3, NO_REST},
-    {BLACK_KEY, EIGTH, Fsh2-25, NO_REST},
-    {WHITE_KEY, DOTTED_EIGTH, D2-25, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, DOTTED_EIGTH, D2, NO_REST},
 
-    {WHITE_KEY, EIGTH, A2+35, NO_REST},
+    {WHITE_KEY, EIGTH, A2, NO_REST},
     {WHITE_KEY, SIXTEENTH, G2, NO_REST},
     {WHITE_KEY, EIGTH, D2, NO_REST},
     {WHITE_KEY, EIGTH, B2, NO_REST},
@@ -523,7 +536,8 @@ typedef enum {
     STATE_MOVING,
     STATE_SETTLING,
     STATE_HOLDING,
-    STATE_RESTING
+    STATE_RESTING,
+    STATE_HOMING
 } PlayState;
 
 volatile PlayState play_state = STATE_IDLE;
@@ -599,21 +613,40 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_Base_Start_IT(&htim2);
   HAL_ADC_Start_DMA(&hadc1, (uint32_t*)&adc_value, 1);
+  HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // Ensure LED is off at start - ACTIVE LOW
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
 
-HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // Ensure LED is off at start - ACTIVE LOW
-//Start PWM channels for motor control
-HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
-HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+  HAL_Delay(500);  // let ADC settle
 
-// Read initial angle so we start from 0
-previous_angle = get_angle();
-HAL_Delay(500);  // small delay to stabilize reading
-total_angle = 0.0f;
-current_target_index = 0;
-//target_position = 0.0f;
+  // Start ISR — homing runs through it
+  if (am_i_home == 0)
+  {
+      if (HAL_GPIO_ReadPin(HALLSENSOR_PORT, HALLSENSOR_PIN) == GPIO_PIN_SET)
+          am_i_home = 1;  // Already at home, skip homing
+      else
+          play_state = STATE_HOMING;
+  }
 
+  previous_angle = get_angle();
+  total_angle = 0.0f;
+  current_position = 0.0f;
+  current_target_index = 0;
+  pid_integral = 0;
+  pid_prev_position = 0;
+  pid_filtered_derivative = 0;
+
+  HAL_TIM_Base_Start_IT(&htim2);
+
+  // Wait for homing to complete (ISR handles motor + hall sensor)
+  while (am_i_home == 0)
+  {
+      // Blink LED while homing
+      HAL_GPIO_TogglePin(LED_PORT, LED_PIN);
+      HAL_Delay(200);
+  }
+  HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // LED off
 
   /* USER CODE END 2 */
 
@@ -621,23 +654,12 @@ current_target_index = 0;
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    //DEBUG MODE
+    // DEBUG MODE
+    //debugging();
 
-    
-
-    
-    //HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
-    debugging();
-
-    //SONG MODE
-    /*if (am_i_home == 0) {
-        go_home(song[0].note);
-    } else {
-        playback_update();
-        song_update();
-    }*/
-    playback_update();
-    song_update();
+    // SONG MODE
+    //playback_update();
+    //song_update();
   }
     /* USER CODE END WHILE */
 
@@ -918,7 +940,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PC13 */
   GPIO_InitStruct.Pin = GPIO_PIN_13;
@@ -927,10 +949,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PA0 */
+  /*Configure GPIO pin : PA0 (Hall sensor, active high) */
   GPIO_InitStruct.Pin = GPIO_PIN_0;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PA7 */
@@ -965,8 +987,12 @@ float get_angle(void)
 void Motor_SetOutput(float output)
 {
     // Clamp to safe range (-1 to 1)
-    if (output > 1.0f) output = 1.0f;
-    if (output < -1.0f) output = -1.0f;
+    if (output > 1.0f) output = 0.75f;
+    if (output < -1.0f) output = -0.75f;
+
+    // Apply minimum PWM floor to overcome static friction
+    if (output > 0 && output < MIN_PWM) output = MIN_PWM;
+    if (output < 0 && output > -MIN_PWM) output = -MIN_PWM;
 
     uint32_t arr = __HAL_TIM_GET_AUTORELOAD(&htim3);
     uint32_t pwm = (uint32_t)(fabsf(output) * arr);
@@ -1029,12 +1055,12 @@ void Update_Position(void)
     if (delta > 180.0f) delta -= 360.0f;
     if (delta < -180.0f) delta += 360.0f;
 
-    // Noise floor: ignore sub-threshold jitter so it doesn't accumulate
-    if (fabsf(delta) < 0.2f)
-        delta = 0.0f;
+    // Low-pass filter to smooth ADC noise while preserving real movement
+    static float filtered_delta = 0.0f;
+    filtered_delta = 0.2f * delta + 0.8f * filtered_delta;
 
-    total_angle += delta;
-    filtered_delta_to_print = delta;
+    total_angle += filtered_delta;
+    filtered_delta_to_print = filtered_delta;
 
     previous_angle = current_angle;
 }
@@ -1058,8 +1084,37 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
         uart_ready = 1;
 
+        // --- Homing (runs through ISR so motor actually works) ---
+        if (play_state == STATE_HOMING)
+        {
+            static uint32_t home_debounce = 0;
+
+            Motor_SetOutput(-0.5f);  // Drive left
+
+            if (HAL_GPIO_ReadPin(HALLSENSOR_PORT, HALLSENSOR_PIN) == GPIO_PIN_SET)
+            {
+                home_debounce++;
+                if (home_debounce > 3)  // 3ms at 1kHz
+                {
+                    Motor_SetOutput(0);
+                    home_debounce = 0;
+                    previous_angle = get_angle();
+                    total_angle = 0.0f;
+                    current_position = 0.0f;
+                    pid_integral = 0;
+                    pid_prev_position = 0;
+                    pid_filtered_derivative = 0;
+                    play_state = STATE_IDLE;
+                    am_i_home = 1;
+                }
+            }
+            else
+            {
+                home_debounce = 0;
+            }
+        }
         // --- PID control ---
-        if (play_state == STATE_MOVING)
+        else if (play_state == STATE_MOVING)
         {
             float error = target_position - current_position;
 
@@ -1069,7 +1124,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
                 pid_integral = 0;
                 pid_prev_position = current_position;
                 pid_filtered_derivative = 0;
+                kickstart_counter = 0;
                 target_reached_flag = 1;
+            }
+            else if (kickstart_counter < KICKSTART_TICKS)
+            {
+                float dir = (error > 0) ? KICKSTART_PWM : -KICKSTART_PWM;
+                Motor_SetOutput(dir);
+                kickstart_counter++;
             }
             else
             {
@@ -1077,7 +1139,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
                 Motor_SetOutput(output);
             }
         }
-        else if (am_i_home)
+        else
         {
             Motor_SetOutput(0);
         }
@@ -1128,6 +1190,7 @@ void debugging(void){
             pid_integral = 0;
             pid_prev_position = current_position;
             pid_filtered_derivative = 0;
+            kickstart_counter = 0;
             play_state = STATE_MOVING;
         }
     }
@@ -1139,6 +1202,7 @@ void debugging(void){
         pid_integral = 0;
         pid_prev_position = current_position;
         pid_filtered_derivative = 0;
+        kickstart_counter = 0;
         play_state = STATE_MOVING;
     }
 }
@@ -1178,6 +1242,7 @@ void travel_play(int finger, int duration, float note, int next_travel_ms, int r
         pid_integral = 0;
         pid_prev_position = current_position;
         pid_filtered_derivative = 0;
+        kickstart_counter = 0;
         play_state = STATE_MOVING;
     }
 }
@@ -1217,6 +1282,7 @@ void playback_update(void)
     switch (play_state)
     {
         case STATE_IDLE:
+        case STATE_HOMING:
             break;
 
         case STATE_MOVING:
@@ -1254,6 +1320,12 @@ void playback_update(void)
             break;
 
         case STATE_HOLDING:
+            // Turn off solenoid at max on-time, but keep waiting for hold_duration
+            if (now - hold_start_time > MAX_SOLENOID_ON_MS)
+            {
+                HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+                HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
+            }
             if (now - hold_start_time > hold_duration)
             {
                 HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
@@ -1272,7 +1344,7 @@ void playback_update(void)
 void go_home(float first_target) {
     static uint32_t trigger_time = 0;
 
-    if (HAL_GPIO_ReadPin(HALLSENSOR_PORT, HALLSENSOR_PIN) == GPIO_PIN_RESET) {
+    if (HAL_GPIO_ReadPin(HALLSENSOR_PORT, HALLSENSOR_PIN) == GPIO_PIN_SET) {
         if (trigger_time == 0) {
             trigger_time = HAL_GetTick();
         }
@@ -1291,7 +1363,7 @@ void go_home(float first_target) {
         }
     } else {
         trigger_time = 0;
-        Motor_SetOutput(-0.3f);
+        Motor_SetOutput(0.3f);
     }
 }
 
