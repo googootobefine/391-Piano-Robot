@@ -1,0 +1,1388 @@
+/* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
+  * @brief          : Main program body
+  ******************************************************************************
+  * @attention
+  *
+  * Copyright (c) 2026 STMicroelectronics.
+  * All rights reserved.
+  *
+  * This software is licensed under terms that can be found in the LICENSE file
+  * in the root directory of this software component.
+  * If no LICENSE file comes with this software, it is provided AS-IS.
+  *
+  ******************************************************************************
+  */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+
+//=========MOTO DEFINITION=========//
+#define MM_PER_DEGREE   0.11111f
+
+//==================Solenoid GPIO for Actuator//
+#define SOLENOID_PIN GPIO_PIN_14  //WHITE
+#define SOLENOID_PORT GPIOB
+#define SOLENOID_PIN2 GPIO_PIN_15
+#define SOLENOID_PORT2 GPIOB
+
+// =====================PIANO KEY DEFINITIONS================//
+// BPM 77, 77/60 = 1.283 seconds per beat round to 1.28 per quarter note
+#define WHITE_KEY 0
+#define BLACK_KEY 1
+#define HALF 2560*2
+#define QUARTER 1280*2
+#define EIGTH 640*2
+#define SIXTEENTH 320*2
+#define DOTTED_QUARTER 1920*2
+#define DOTTED_EIGTH 960*2
+#define REST 1
+#define NO_REST 0
+#define MAX_SOLENOID_ON_MS 800
+// UP TO 550RPM, 9.167 rotation per second  40 MM PER ROTATION 9.1678 = 366.67 mm per second
+// 22mm per white key -> 16.67 keys per second or 60ms second per key travelled
+
+#define MS_TRAVEL_PER_KEY 60
+#define WHITE_KEY_SPACING_MM 25.0f
+//#define DIS_SOL1_SOL2 60.0f   //mm,
+
+#define SETTLE_TIME_MS  40   // start with 20–80 ms, tune experimentally
+
+//note definitions
+// White keys: B C D E F G A, 25mm apart, B1 = 0.0f
+// Sharps: position = white key 3 keys back (black solenoid offset)
+#define B1     0.0f
+#define Dsh1   0.0f    // D#
+#define C1     25.0f
+#define D1     50.0f
+#define Fsh1   50.0f   // F#
+#define E1     75.0f
+#define Gsh1   75.0f   // G#
+#define F1     100.0f
+#define Ash1   100.0f  // A#
+#define G1     125.0f
+#define A1     150.0f
+#define Csh2   150.0f  // C#
+#define B2     175.0f
+#define Dsh2   175.0f  // D#
+#define C2     200.0f
+#define D2     225.0f
+#define Fsh2   225.0f  // F#
+#define E2     250.0f
+#define Gsh2   250.0f  // G#
+#define F2     275.0f
+#define Ash2   275.0f  // A#
+#define G2     300.0f
+#define A2     325.0f
+#define Csh3   325.0f  // C#
+#define B3     350.0f
+#define Dsh3   350.0f  // D#
+#define C3     375.0f
+#define D3     400.0f
+#define Fsh3   400.0f  // F#
+#define E3     425.0f
+#define Gsh3   425.0f  // G#
+//=================================================================================
+
+//===============HALL SENSOR GPIO==========//
+#define HALLSENSOR_PIN GPIO_PIN_0
+#define HALLSENSOR_PORT GPIOA
+
+//LED for debugging
+#define LED_PIN GPIO_PIN_13
+#define LED_PORT GPIOC
+
+
+
+/* ==================== PID Gains ==================== */
+/* Start with these, tune on real hardware:             */
+/*   Kp: increase until fast response without overshoot */
+/*   Ki: increase to eliminate steady‑state error       */
+/*   Kd: increase to dampen oscillation                 */
+
+
+#define PID_KP               0.1f //0.035f 0.6f
+#define PID_KI               0.005f
+#define PID_KD              0.004f//0.004f// 0.004f //0.125f//0.00075f//0.06f
+
+#define ANGLE_BIAS 0.0f   // degrees, tune this
+
+/* Fixed backlash offset added to every move (mm) */
+#define BACKLASH_COMP_MM      20.0f
+
+//DRIFT NOTES
+
+// 1. NO ADDITIONAL SUPPORT
+// CLOSE TO MOTOR: OK
+// MIDDLE: SLIGHT LEFT DRIFT
+// RIGHT SIDE: MORE LEFT DRIFT
+
+//2. ADD belt block support  SUPPORT UNDER MOTOR SIDE
+// RIGHT SIDE: SLIGHT LEFT DRIFT
+// MIDDLE : WORSE LEFT DRIFT
+// MOTOR SIDE: OK
+
+//3. ADD SUPPORT CLOSE TO RIGHT SIDE (with belt block support close to motor)
+//CLOSE TO MOTOR: VERY SLIGHT RIGHT DRIFT
+// MIDDLE: BAD LEFT DRIFT
+// RIGHT SIDE: PERFECT
+
+//4.. ADD SUPPORT CLOSE TO LEFT SIDE (WITH SUPPORT CLOSE TO RIGHT SIDE AND BELT BLOCK SUPPORT CLOSE TO MOTOR)
+// RIGHT SIDE and MIDDLE: PRETTY GOOD
+// CLOSE TO MOTOR: RIGHT DRIFT
+
+/* ==================== PID Timing ==================== */
+/* TIM2 fires at 1 kHz (16 MHz / 16 prescaler / 1000 period) */
+#define PID_DT               (1.0f / 1000.0f)   /* 1 ms */
+
+/* Integral anti‑windup clamp                           */
+#define INTEGRAL_MAX         100.0f
+
+/* Dead‑band: if |error| <= this, stop the motor        */
+#define DEADBAND             5.0f
+//==============================================================
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+DMA_HandleTypeDef hdma_adc1;
+
+TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
+
+UART_HandleTypeDef huart1;
+
+/* USER CODE BEGIN PV */
+
+//angle tracking variables
+volatile float total_angle = 0;
+float previous_angle = 0;
+
+volatile float target_position = 0.0f;   // mm
+volatile uint8_t uart_ready = 0;
+char uart_msg[100];
+
+volatile uint32_t adc_value;
+volatile float debug_angle = 0;
+volatile float debug_dist = 0;
+
+volatile float filtered_delta_to_print = 0;
+
+
+
+//pid variables
+float pid_integral = 0;
+float pid_prev_position = 0;
+float pid_filtered_derivative = 0;
+
+//home
+volatile int am_i_home = 0;  // set to 0 for song mode (homing), 1 for debug mode (skip homing)
+
+uint32_t hold_start_time = 0;
+//volatile uint8_t holding = 0;
+volatile float current_position = 0.0f;
+uint32_t last_pid_time = 0;
+volatile uint8_t solenoid_trigger = 0;
+volatile uint8_t target_reached_flag = 0;
+
+//========MODES========//
+float targets[] = {100.0f, 0.0f, 50.0f, 0.0f, 150.0f, 0.0f};  // Example target positions in mm
+#define NUMBER_OF_TARGETS (sizeof(targets) / sizeof(targets[0]))
+volatile int current_target_index = 0;
+
+
+
+
+typedef struct {
+    int finger;
+    int duration;
+    float note;
+    int rest;
+} Note;
+
+Note song[] = {
+
+    //======= INTRO 1 phrase=====//
+    {BLACK_KEY, EIGTH, Csh3-20, NO_REST},//
+    {WHITE_KEY, SIXTEENTH, B3, NO_REST},//
+    {BLACK_KEY, EIGTH, Fsh2-15.0, NO_REST}, //
+    {WHITE_KEY, EIGTH, D2, NO_REST},//
+
+    {BLACK_KEY, QUARTER, Csh3-10, NO_REST},//
+    {WHITE_KEY, SIXTEENTH, B3+5, NO_REST},//
+    {BLACK_KEY, EIGTH, Fsh2-4, NO_REST}, //uh
+    {WHITE_KEY, EIGTH, D2+11, NO_REST},//uh
+
+    {WHITE_KEY, EIGTH, A2+11, NO_REST},//
+    {WHITE_KEY, SIXTEENTH, G2-1, NO_REST},//
+    {WHITE_KEY, EIGTH, D2-2, NO_REST},//
+    {WHITE_KEY, EIGTH, B2, NO_REST},//
+
+    {WHITE_KEY, EIGTH, A2-5, NO_REST},//
+    {WHITE_KEY, EIGTH, G2-17, NO_REST},    //
+    {WHITE_KEY, QUARTER, D2-15, NO_REST}, //
+
+    {WHITE_KEY, EIGTH, G2-10, NO_REST}, //
+    {BLACK_KEY, SIXTEENTH, Fsh2-28, NO_REST}, //
+    {WHITE_KEY, EIGTH, D2, NO_REST},//'
+    {WHITE_KEY, EIGTH, B2-12, NO_REST}, //
+    {WHITE_KEY, QUARTER+EIGTH, G1-18, NO_REST}, //
+
+    {BLACK_KEY, EIGTH, Fsh1-45, NO_REST},//all change to sixteenth
+    {WHITE_KEY, EIGTH, G1-30, NO_REST},//
+    {WHITE_KEY, EIGTH, A1-20, NO_REST},//
+    {WHITE_KEY, EIGTH, B2-13, NO_REST},//
+    {BLACK_KEY, EIGTH, Csh2-30, NO_REST},//
+    {WHITE_KEY, EIGTH, D2-20, NO_REST},//
+    {WHITE_KEY, EIGTH, E2-20, NO_REST},//
+    {BLACK_KEY, EIGTH, Fsh2-40, NO_REST},//
+
+    //==intro 2nd phrase==//
+
+    /*{BLACK_KEY, EIGTH, Csh3, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B3, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+
+    {BLACK_KEY, QUARTER, Csh3, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B3, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, DOTTED_EIGTH, D2, NO_REST},
+
+    {WHITE_KEY, EIGTH, A2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, G2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+
+    {WHITE_KEY, DOTTED_EIGTH, A2, NO_REST},
+    {WHITE_KEY, EIGTH, G2, NO_REST},
+    {WHITE_KEY, QUARTER, D2, NO_REST},
+
+    {WHITE_KEY, EIGTH, G2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Fsh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+    {WHITE_KEY, HALF + SIXTEENTH, G1, NO_REST},
+
+    {BLACK_KEY, EIGTH, Fsh1, NO_REST},
+    {WHITE_KEY, EIGTH, G1, NO_REST},
+    {WHITE_KEY, EIGTH, A1, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, E2, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+
+    //== VERSE 1==//
+
+    //I feel so unsure
+    {BLACK_KEY, DOTTED_QUARTER, Fsh2, NO_REST},
+    {WHITE_KEY, QUARTER, E2, NO_REST},
+    {WHITE_KEY, QUARTER, D2, NO_REST},
+    {WHITE_KEY, DOTTED_QUARTER, B2, NO_REST},
+
+    //as i take your hand and lead you
+    {WHITE_KEY, HALF+EIGTH, B2, REST},
+
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+    {BLACK_KEY, DOTTED_QUARTER, Fsh2, NO_REST},
+    {WHITE_KEY, DOTTED_QUARTER, E2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, E2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, D2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+
+    //to the dance floor
+    {BLACK_KEY, QUARTER, Fsh2, NO_REST},
+    {WHITE_KEY, QUARTER, E2, NO_REST},
+    {WHITE_KEY, DOTTED_EIGTH, D2, NO_REST},
+    {BLACK_KEY, QUARTER+SIXTEENTH, Csh2, NO_REST},
+
+    //as the music dies
+    {WHITE_KEY, EIGTH, Csh2, REST},
+
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, E2, NO_REST},
+    {BLACK_KEY, HALF+SIXTEENTH, Fsh2, NO_REST},
+
+    //something in your eyes
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, E2, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, A2, NO_REST},
+    {BLACK_KEY, SIXTEENTH+QUARTER, Fsh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, A2, NO_REST},
+
+    //calls to mind a silver screen
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, EIGTH, G2, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, EIGTH, G2, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, G2, NO_REST},
+    {BLACK_KEY, SIXTEENTH+QUARTER, Fsh2, NO_REST},
+
+    //and all its sad goodbyes
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, E2, NO_REST},
+    {WHITE_KEY, SIXTEENTH+QUARTER, E2, NO_REST},
+    {WHITE_KEY, QUARTER, D2, NO_REST},
+    {BLACK_KEY, QUARTER, Csh2, NO_REST},
+
+    //im never gonna dance again
+    {WHITE_KEY, DOTTED_EIGTH, B2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {WHITE_KEY, SIXTEENTH+QUARTER, B2, NO_REST},
+
+    //guilty feet have got no rhythm
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {WHITE_KEY, DOTTED_EIGTH, E2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+
+    //though it's easy to pretend
+    {WHITE_KEY, DOTTED_EIGTH, B2, REST},
+
+    {WHITE_KEY, SIXTEENTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {WHITE_KEY, QUARTER, B2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+
+    //i know you're not a fool
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {BLACK_KEY, DOTTED_EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {WHITE_KEY, QUARTER, D2, NO_REST},
+    {BLACK_KEY, QUARTER, Csh2, NO_REST},
+
+    //i should have known better than to cheat a friend
+    {WHITE_KEY, DOTTED_EIGTH, B2, REST},
+
+    {WHITE_KEY, SIXTEENTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {WHITE_KEY, QUARTER+SIXTEENTH, B2, NO_REST},
+
+    //and waste the chance that ive been given
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {WHITE_KEY, DOTTED_EIGTH, E2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+
+    //so i'm never gonna dance again
+    {WHITE_KEY, DOTTED_EIGTH, B2, REST},
+
+    {WHITE_KEY, SIXTEENTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {WHITE_KEY, QUARTER+SIXTEENTH, B2, NO_REST},
+
+    //the way i danced with you
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {BLACK_KEY, DOTTED_EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Csh2, NO_REST},
+    {WHITE_KEY, QUARTER, D2, NO_REST},
+    {BLACK_KEY, QUARTER, Csh2, NO_REST},
+
+    //SONG LICK PHRASES (PHRASE 1)
+    {BLACK_KEY, EIGTH, Csh3, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B3, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+
+    {BLACK_KEY, QUARTER, Csh3, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B3, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, DOTTED_EIGTH, D2, NO_REST},
+
+    {WHITE_KEY, EIGTH, A2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, G2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+
+    {WHITE_KEY, DOTTED_EIGTH, A2, NO_REST},
+    {WHITE_KEY, EIGTH, G2, NO_REST},
+    {WHITE_KEY, QUARTER, D2, NO_REST},
+
+    {WHITE_KEY, EIGTH, G2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Fsh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+    {WHITE_KEY, HALF + SIXTEENTH, G1, NO_REST},
+
+    {BLACK_KEY, EIGTH, Fsh1, NO_REST},
+    {WHITE_KEY, EIGTH, G1, NO_REST},
+    {WHITE_KEY, EIGTH, A1, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, E2, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+
+    //==SONG LICK 2nd PHRASE==//
+
+    {BLACK_KEY, EIGTH, Csh3, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B3, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+
+    {BLACK_KEY, QUARTER, Csh3, NO_REST},
+    {WHITE_KEY, SIXTEENTH, B3, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},
+    {WHITE_KEY, DOTTED_EIGTH, D2, NO_REST},
+
+    {WHITE_KEY, EIGTH, A2, NO_REST},
+    {WHITE_KEY, SIXTEENTH, G2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+
+    {WHITE_KEY, DOTTED_EIGTH, A2, NO_REST},
+    {WHITE_KEY, EIGTH, G2, NO_REST},
+    {WHITE_KEY, QUARTER, D2, NO_REST},
+
+    {WHITE_KEY, EIGTH, G2, NO_REST},
+    {BLACK_KEY, SIXTEENTH, Fsh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+    {WHITE_KEY, HALF + SIXTEENTH, G1, NO_REST},
+
+    {BLACK_KEY, EIGTH, Fsh1, NO_REST},
+    {WHITE_KEY, EIGTH, G1, NO_REST},
+    {WHITE_KEY, EIGTH, A1, NO_REST},
+    {WHITE_KEY, EIGTH, B2, NO_REST},
+    {BLACK_KEY, EIGTH, Csh2, NO_REST},
+    {WHITE_KEY, EIGTH, D2, NO_REST},
+    {WHITE_KEY, EIGTH, E2, NO_REST},
+    {BLACK_KEY, EIGTH, Fsh2, NO_REST},*/
+
+
+
+
+
+};
+
+int song_index = 0;
+const int song_length = sizeof(song) / sizeof(song[0]);
+
+
+typedef enum {
+    STATE_IDLE,
+    STATE_MOVING,
+    STATE_SETTLING,
+    STATE_HOLDING,
+    STATE_RESTING,
+	STATE_HOMING
+} PlayState;
+
+volatile PlayState play_state = STATE_IDLE;
+uint32_t hold_duration = 0;
+int w_or_b = 0;
+volatile int8_t last_direction = 0;  // +1 = right, -1 = left, 0 = unknown
+
+
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
+static void MX_USART1_UART_Init(void);
+static void MX_ADC1_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_TIM2_Init(void);
+/* USER CODE BEGIN PFP */
+
+float get_angle(void);
+void Motor_SetOutput(float output);
+void Update_Position(void);
+
+float PID_Compute(float current_pos, float target_pos);
+void debugging();
+void travel_play(int finger, int duration, float note, int next_travel_ms, int rest);
+void song_update(void);
+void playback_update(void);
+void go_home(float first_target);
+//void Run_PID(void);
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+//am i still here
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_USART1_UART_Init();
+  MX_ADC1_Init();
+  MX_TIM3_Init();
+  MX_TIM2_Init();
+  /* USER CODE BEGIN 2 */
+
+  HAL_ADC_Start_DMA(&hadc1, (uint32_t*)&adc_value, 1);
+
+HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);  // Ensure LED is off at start - ACTIVE LOW
+//Start PWM channels for motor control
+HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+
+// Read initial angle so we start from 0
+
+HAL_Delay(500);  // small delay to stabilize reading
+// Start ISR — homing runs through it
+  if (am_i_home == 0)
+  {
+      if (HAL_GPIO_ReadPin(HALLSENSOR_PORT, HALLSENSOR_PIN) == GPIO_PIN_SET)
+          am_i_home = 1;  // Already at home, skip homing
+      else
+          play_state = STATE_HOMING;
+  }
+ previous_angle = get_angle();
+total_angle = 0.0f;
+current_target_index = 0;
+
+HAL_TIM_Base_Start_IT(&htim2);
+while (am_i_home ==0){}
+HAL_Delay(500);
+
+//target_position = 0.0f;
+
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    //DEBUG MODE
+
+
+
+
+    //HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
+    //debugging();
+
+    //SONG MODE
+    /*if (am_i_home == 0) {
+        go_home(song[0].note);
+    } else {
+        playback_update();
+        song_update();
+    }*/
+    playback_update();
+    song_update();
+  }
+    /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+  RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL2;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
+  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV2;
+  if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Common config
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T3_TRGO;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_7;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_71CYCLES_5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 15;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 999;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 159;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 99;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : PC13 */
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA0 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB14 PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+
+//------------------------- 1: GET ANGLE----------------------//
+float get_angle(void)
+{
+    float voltage = (adc_value / 4095.0f) * 3.3f;
+    float angle = (voltage / 3.3f) * 360.0f;
+
+    return angle + ANGLE_BIAS;
+}
+
+// ------------------------2: MOTOR OUTPUT---------------------//
+void Motor_SetOutput(float output)
+{
+    // Clamp to safe range (-1 to 1)
+    if (output > 1.0f) output = 0.75f;
+    if (output < -1.0f) output = -0.75f;
+
+    uint32_t arr = __HAL_TIM_GET_AUTORELOAD(&htim3);
+    uint32_t pwm = (uint32_t)(fabsf(output) * arr);
+
+    if (output > 0)
+    {
+        // Forward
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, pwm); // PB0 (IN1)
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);   // PB1 (IN2)
+    }
+    else if (output < 0)
+    {
+        // Backward
+
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 0);   // PB0 (IN1)
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, pwm); // PB1 (IN2)
+    }
+    else
+    {
+        // Stop
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 0);
+        __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, 0);
+    }
+}
+
+//----------------------3. PID COMPUTE--------------------//
+
+float PID_Compute(float current_pos, float target_pos)
+{
+    float error = target_pos - current_pos;
+
+    // Integral
+    pid_integral += error * PID_DT;
+    if (pid_integral > INTEGRAL_MAX) pid_integral = INTEGRAL_MAX;
+    if (pid_integral < -INTEGRAL_MAX) pid_integral = -INTEGRAL_MAX;
+
+    // Derivative on measurement (not error) to avoid derivative kick
+    float raw_derivative = -(current_pos - pid_prev_position) / PID_DT;
+    pid_filtered_derivative = 0.1f * raw_derivative + 0.9f * pid_filtered_derivative;
+
+    // PID output
+    float output = PID_KP * error
+                 + PID_KI * pid_integral
+                 + PID_KD * pid_filtered_derivative;
+
+    pid_prev_position = current_pos;
+
+    return output;
+}
+
+//------------------------4. UPDATE POSITION-----------------------------//
+
+void Update_Position(void)
+{
+    float current_angle = get_angle();
+
+    float delta = current_angle - previous_angle;
+
+    // unwrap
+    if (delta > 180.0f) delta -= 360.0f;
+    if (delta < -180.0f) delta += 360.0f;
+
+    // Noise floor: ignore sub-threshold jitter so it doesn't accumulate
+    if (fabsf(delta) < 0.2f)
+        delta = 0.0f;
+
+    total_angle += delta;
+    filtered_delta_to_print = delta;
+
+    previous_angle = current_angle;
+}
+
+
+//-------------------------5. TIMER 2 INTERRUPT (RUNS PID)--------------------//
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance == TIM2)
+    {
+
+
+        // --- Position update ---
+        // Skip accumulation during HOLDING: solenoid switching noise corrupts ADC
+        if (play_state != STATE_HOLDING)
+            Update_Position();
+        current_position = total_angle * MM_PER_DEGREE;
+
+        debug_angle = total_angle;
+        debug_dist = current_position;
+
+        uart_ready = 1;
+
+        if (play_state == STATE_HOMING)
+         {
+             static uint32_t home_debounce = 0;
+
+             Motor_SetOutput(-0.5f);  // Drive left
+
+             if (HAL_GPIO_ReadPin(HALLSENSOR_PORT, HALLSENSOR_PIN) == GPIO_PIN_SET)
+             {
+                 home_debounce++;
+                 if (home_debounce > 3)  // 3ms at 1kHz
+                 {
+                     Motor_SetOutput(0);
+                     home_debounce = 0;
+                     previous_angle = get_angle();
+                     total_angle = 0.0f;
+                     current_position = 0.0f;
+                     pid_integral = 0;
+                     pid_prev_position = 0;
+                     pid_filtered_derivative = 0;
+                     play_state = STATE_IDLE;
+                     am_i_home = 1;
+                 }
+             }
+             else
+             {
+                 home_debounce = 0;
+             }
+         }
+        // --- PID control ---
+        else if (play_state == STATE_MOVING)
+        {
+            float error = target_position - current_position;
+
+            if (fabsf(error) < DEADBAND)
+            {
+                Motor_SetOutput(0);
+                pid_integral = 0;
+                pid_prev_position = current_position;
+                pid_filtered_derivative = 0;
+                target_reached_flag = 1;
+            }
+            else
+            {
+                float output = PID_Compute(current_position, target_position);
+                Motor_SetOutput(output);
+            }
+        }
+        else if (am_i_home)
+        {
+            Motor_SetOutput(0);
+        }
+    }
+}
+//------------------------6. DEBUGGING MODE----------------------------//
+void debugging(void){
+  // Force solenoids off in debug mode
+  HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
+
+  // --- UART debug ---
+    if (uart_ready)
+    {
+        uart_ready = 0;
+
+        sprintf(uart_msg, "Angle: %.2f | Dist: %.2f | Delta %.2f \r\n",
+                debug_angle, debug_dist, filtered_delta_to_print);
+
+        HAL_UART_Transmit(&huart1, (uint8_t*)uart_msg, strlen(uart_msg), 100);
+    }
+
+    // --- Handle target reached event (from ISR) ---
+    if (target_reached_flag)
+    {
+        target_reached_flag = 0;
+
+        HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+
+        hold_start_time = HAL_GetTick();
+        play_state = STATE_HOLDING;
+    }
+
+    // --- Holding logic (timed in main loop) ---
+    if (play_state == STATE_HOLDING)
+    {
+        if (HAL_GetTick() - hold_start_time > 600)
+        {
+            HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
+
+            // Move to next target
+            current_target_index++;
+
+            if (current_target_index >= NUMBER_OF_TARGETS)
+                current_target_index = 0;
+
+            target_position = targets[current_target_index];
+            pid_integral = 0;
+            pid_prev_position = current_position;
+            pid_filtered_derivative = 0;
+            play_state = STATE_MOVING;
+        }
+    }
+
+    // On first call, start moving to the first target
+    if (play_state == STATE_IDLE)
+    {
+        target_position = targets[current_target_index];
+        pid_integral = 0;
+        pid_prev_position = current_position;
+        pid_filtered_derivative = 0;
+        play_state = STATE_MOVING;
+    }
+}
+
+//==========================7. Play note========================//
+
+void travel_play(int finger, int duration, float note, int next_travel_ms, int rest)
+{
+    if (play_state != STATE_IDLE)
+        return;
+
+    w_or_b = finger;
+
+    int32_t adjusted = duration - next_travel_ms - SETTLE_TIME_MS;
+    if (adjusted < 100) adjusted = 100;
+
+    hold_duration = adjusted;
+
+    if (rest == REST)
+    {
+        hold_start_time = HAL_GetTick();
+        play_state = STATE_RESTING;
+        return;
+    }
+
+    float error = fabsf(note - current_position);
+
+    if (error < DEADBAND)
+    {
+        // Already there → skip movement
+        hold_start_time = HAL_GetTick();
+        play_state = STATE_SETTLING; // or STATE_HOLDING for faster repeat
+    }
+    else
+    {
+        target_position = note;
+        pid_integral = 0;
+        pid_prev_position = current_position;
+        pid_filtered_derivative = 0;
+        play_state = STATE_MOVING;
+    }
+}
+
+
+//==========================8. SONG UPDATE (called in main loop)========================//
+void song_update(void)
+{
+    if (play_state == STATE_IDLE && song_index < song_length)
+    {
+        // Capture current index
+        int i = song_index;
+
+        float next_pos = (i + 1 < song_length) ? song[i + 1].note : song[i].note;
+        int next_travel_ms = (int)(fabsf(next_pos - song[i].note) * MS_TRAVEL_PER_KEY / WHITE_KEY_SPACING_MM);
+
+        travel_play(
+            song[i].finger,
+            song[i].duration,
+            song[i].note,
+            next_travel_ms,
+            song[i].rest
+        );
+
+        // Only increment if we actually left IDLE
+        if (play_state != STATE_IDLE)
+        {
+            song_index++;
+        }
+    }
+}
+
+void playback_update(void)
+{
+    uint32_t now = HAL_GetTick();
+
+    switch (play_state)
+    {
+        case STATE_IDLE:
+            break;
+
+        case STATE_HOMING:
+        	break;
+
+        case STATE_MOVING:
+            if (target_reached_flag)
+            {
+                target_reached_flag = 0;
+
+                hold_start_time = now;
+                play_state = STATE_SETTLING;
+            }
+            break;
+
+        case STATE_RESTING:
+            if (now - hold_start_time >= hold_duration)
+            {
+                play_state = STATE_IDLE;
+            }
+            break;
+        case STATE_SETTLING:
+            if (now - hold_start_time >= SETTLE_TIME_MS)
+            {
+                if (w_or_b == WHITE_KEY)
+                {
+                    HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_SET);
+                    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+                }
+                else
+                {
+                    HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_SET);
+                    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+                }
+                hold_start_time = now;
+                play_state = STATE_HOLDING;
+            }
+            break;
+
+        case STATE_HOLDING:
+        	if (now - hold_start_time > MAX_SOLENOID_ON_MS){
+        		  HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+        		                HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
+        		                HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
+        	}
+            if (now - hold_start_time > hold_duration)
+            {
+                HAL_GPIO_WritePin(SOLENOID_PORT, SOLENOID_PIN, GPIO_PIN_RESET);
+                HAL_GPIO_WritePin(SOLENOID_PORT2, SOLENOID_PIN2, GPIO_PIN_RESET);
+                HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
+
+                // Re-sync reference angle so first delta after hold is clean
+                previous_angle = get_angle();
+                play_state = STATE_IDLE;
+            }
+            break;
+    }
+}
+
+//============HOME SENSOR===================//
+void go_home(float first_target) {
+    static uint32_t trigger_time = 0;
+
+    if (HAL_GPIO_ReadPin(HALLSENSOR_PORT, HALLSENSOR_PIN) == GPIO_PIN_RESET) {
+        if (trigger_time == 0) {
+            trigger_time = HAL_GetTick();
+        }
+        if (HAL_GetTick() - trigger_time > 50) {
+            Motor_SetOutput(0);
+            am_i_home = 1;
+            play_state = STATE_IDLE;
+            previous_angle = get_angle();
+            HAL_Delay(500);
+            total_angle = 0.0f;
+            current_position = 0.0f;
+            pid_integral = 0;
+            pid_prev_position = current_position;
+            pid_filtered_derivative = 0;
+            target_position = first_target;
+        }
+    } else {
+        trigger_time = 0;
+        Motor_SetOutput(-0.3f);
+    }
+}
+
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+
+  /* User can add his own implementation to report the HAL error return state */
+
+  __disable_irq();
+  volatile uint32_t d;
+  while (1)
+  {
+    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
+    for (d = 0; d < 800000; d++);
+    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
+    for (d = 0; d < 800000; d++);
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+#ifdef USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
